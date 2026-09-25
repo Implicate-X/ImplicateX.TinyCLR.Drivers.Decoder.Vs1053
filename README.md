@@ -28,7 +28,7 @@
   - AAC → ADTS/ADIF raw stream
   - OGG → Ogg container with Vorbis/Opus track extraction
 
-## Device class obtains a MediaPayLoad from the appropriate preprocessor based on file extension
+### Device class obtains a MediaPayLoad from the appropriate preprocessor based on file extension
 ---
 
 ## 📦 Requirements
