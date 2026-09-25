@@ -57,7 +57,8 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				fillerBytes: 2052,
 				requiresStartupMode: true,
 				customClockFrequency: 0,
-				startFillByte: 0x00 );
+				startFillByte: 0x00,
+				patchType: Device.PatchEngine.PatchType.StandardCodec );
 		}
 
 		/// <summary>

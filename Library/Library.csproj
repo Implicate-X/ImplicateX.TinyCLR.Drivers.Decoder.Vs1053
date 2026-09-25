@@ -39,21 +39,25 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="AacProcessor.cs" />
+    <Compile Include="DsdProcessor.cs" />
+    <Compile Include="FlacProcessor.cs" />
     <Compile Include="IMediaPreprocessor.cs" />
     <Compile Include="M4aProcessor.cs" />
     <Compile Include="MediaPayLoad.cs" />
     <Compile Include="Mp3Processor.cs" />
+    <Compile Include="OggProcessor.cs" />
     <Compile Include="PatchEngine.cs" />
     <Compile Include="Plugins.Designer.cs">
       <AutoGen>True</AutoGen>
       <DesignTime>True</DesignTime>
       <DependentUpon>Plugins.resx</DependentUpon>
     </Compile>
+    <Compile Include="PreprocessorRegistry.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Device.cs" />
     <Compile Include="MidiEngine.cs" />
     <Compile Include="WavProcessor.cs" />
-    <Compile Include="DsdProcessor.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
@@ -107,4 +111,3 @@
     <Error Condition="!Exists('packages\GHIElectronics.TinyCLR.Devices.Uart.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.Uart.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\GHIElectronics.TinyCLR.Devices.Uart.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.Uart.props'))" />
   </Target>
 </Project>
-

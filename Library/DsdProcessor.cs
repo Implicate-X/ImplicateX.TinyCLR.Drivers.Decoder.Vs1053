@@ -49,7 +49,8 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				fillerBytes: 12288,
 				requiresStartupMode: false,
 				customClockFrequency: DsdDataSPIFrequency,
-				startFillByte: DsdEndFillByte );
+				startFillByte: DsdEndFillByte,
+				patchType: Device.PatchEngine.PatchType.Dsd );
 		}
 
 		/// <summary>

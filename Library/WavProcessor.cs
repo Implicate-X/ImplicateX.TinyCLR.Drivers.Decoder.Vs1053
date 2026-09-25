@@ -52,13 +52,13 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			{
 				Debug.WriteLineIf( EnableVerboseTrace, "[WavProcessor] Invalid or missing WAV data chunk. Using full stream fallback." );
 				fs.Position = 0;
-				return new MediaPayLoad( fs, 2052, true, 0, 0x00 );
+				return new MediaPayLoad( fs, 2052, true, 0, 0x00, Device.PatchEngine.PatchType.StandardCodec );
 			}
 
 			Debug.WriteLineIf( EnableVerboseTrace, $"[WavProcessor] WAV bounded stream prepared: 0..{maxBytes}" );
 			Stream bounded = new BoundedReadStream( fs, maxBytes );
 
-			return new MediaPayLoad( bounded, 2052, true, 0, 0x00 );
+			return new MediaPayLoad( bounded, 2052, true, 0, 0x00, Device.PatchEngine.PatchType.StandardCodec );
 		}
 
 		/// <summary>

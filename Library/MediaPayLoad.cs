@@ -17,13 +17,17 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 	/// <param name="startFillByte">
 	/// The byte value used to fill the startup buffer before streaming begins.
 	/// </param>
+	/// <param name="patchType">
+	/// The codec patch that should be loaded before playback starts.
+	/// </param>
 	public sealed class MediaPayLoad
 	(
 		Stream stream,
 		int fillerBytes,
 		bool requiresStartupMode = true,
 		int customClockFrequency = 0,
-		byte startFillByte = 0x00
+		byte startFillByte = 0x00,
+		Device.PatchEngine.PatchType patchType = Device.PatchEngine.PatchType.StandardCodec
 	)
 	{
 		/// <summary>
@@ -50,5 +54,10 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 		/// Gets the byte value used to fill the startup buffer.
 		/// </summary>
 		public byte StartFillByte { get; } = startFillByte;
+
+		/// <summary>
+		/// Gets the patch type required for decoder playback.
+		/// </summary>
+		public Device.PatchEngine.PatchType PatchType { get; } = patchType;
 	}
 }

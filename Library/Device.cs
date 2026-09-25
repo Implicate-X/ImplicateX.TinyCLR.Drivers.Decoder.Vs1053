@@ -586,75 +586,24 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				Stream mediaStream = fs;
 				bool disposeMediaStream = false;
 
-				if( label == "MP3" )
+				string extension = Path.GetExtension( filePath );
+				IMediaPreprocessor mediaPreprocessor = PreprocessorRegistry.Resolve( extension );
+				mediaPayLoad = mediaPreprocessor.Process( fs );
+
+				if( mediaPayLoad != null && mediaPayLoad.Stream != null )
 				{
-					IMediaPreprocessor mp3Processor = new Mp3Processor();
-					mediaPayLoad = mp3Processor.Process( fs );
-
-					if( mediaPayLoad != null && mediaPayLoad.Stream != null )
-					{
-						mediaStream = mediaPayLoad.Stream;
-						disposeMediaStream = !ReferenceEquals( mediaStream, fs );
-						fillerBytes = mediaPayLoad.FillerBytes;
-						dataStart = mediaStream.CanSeek ? mediaStream.Position : 0;
-						totalFileBytes = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
-					}
+					mediaStream = mediaPayLoad.Stream;
+					disposeMediaStream = !ReferenceEquals( mediaStream, fs );
+					fillerBytes = mediaPayLoad.FillerBytes;
+					dataStart = mediaStream.CanSeek ? mediaStream.Position : 0;
+					totalFileBytes = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
 				}
-				else if( label == "WAV" )
-				{
-					IMediaPreprocessor wavProcessor = new WavProcessor();
-					mediaPayLoad = wavProcessor.Process( fs );
 
-					if( mediaPayLoad != null && mediaPayLoad.Stream != null )
-					{
-						mediaStream = mediaPayLoad.Stream;
-						disposeMediaStream = !ReferenceEquals( mediaStream, fs );
-						fillerBytes = mediaPayLoad.FillerBytes;
-						dataStart = mediaStream.CanSeek ? mediaStream.Position : 0;
-						totalFileBytes = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
-					}
-				}
-				else if( label == "FLAC" )
-				{
-					this.patchEngine.LoadPlugin( patchType: PatchEngine.PatchType.Flac );
+				PatchEngine.PatchType patchType = mediaPayLoad != null
+					? mediaPayLoad.PatchType
+					: PatchEngine.PatchType.StandardCodec;
 
-					// FLAC files start with "fLaC" (0x66 0x4C 0x61 0x43)
-					// No metadata skipping needed; send entire file from beginning
-					dataStart = 0;
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] FLAC: starting from beginning (fLaC header)" );
-				}
-				else if( label == "M4A" )
-				{
-					this.patchEngine.LoadPlugin( patchType: PatchEngine.PatchType.StandardCodec );
-
-					IMediaPreprocessor m4aProcessor = new M4aProcessor();
-					mediaPayLoad = m4aProcessor.Process( fs );
-
-					if( mediaPayLoad != null && mediaPayLoad.Stream != null )
-					{
-						mediaStream = mediaPayLoad.Stream;
-						disposeMediaStream = !ReferenceEquals( mediaStream, fs );
-						fillerBytes = mediaPayLoad.FillerBytes;
-						dataStart = mediaStream.CanSeek ? mediaStream.Position : 0;
-						totalFileBytes = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
-					}
-				}
-				else if( label == "DSD" )
-				{
-					this.patchEngine.LoadPlugin( patchType: PatchEngine.PatchType.Dsd );
-
-					IMediaPreprocessor dsdProcessor = new DsdProcessor();
-					mediaPayLoad = dsdProcessor.Process( fs );
-
-					if( mediaPayLoad != null && mediaPayLoad.Stream != null )
-					{
-						mediaStream = mediaPayLoad.Stream;
-						disposeMediaStream = !ReferenceEquals( mediaStream, fs );
-						fillerBytes = mediaPayLoad.FillerBytes;
-						dataStart = mediaStream.CanSeek ? mediaStream.Position : 0;
-						totalFileBytes = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
-					}
-				}
+				this.patchEngine.LoadPlugin( patchType );
 
 				long streamLengthForValidation = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
 				if( dataStart >= streamLengthForValidation )
@@ -664,8 +613,10 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] {label}: Total bytes to send={totalFileBytes}, starting at offset={dataStart}, fillers={fillerBytes}" );
 
-				// Patch-based formats keep their patch-provided runtime context.
-				if( label != "FLAC" && label != "DSD" )
+				bool patchBasedContext = mediaPayLoad != null
+					&& ( mediaPayLoad.PatchType == PatchEngine.PatchType.Flac || mediaPayLoad.PatchType == PatchEngine.PatchType.Dsd );
+
+				if( !patchBasedContext )
 				{
 					ConfigureStartupRegisters();
 					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Startup registers configured" );
@@ -678,13 +629,13 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 				int targetSdiClock = ( mediaPayLoad != null && mediaPayLoad.CustomClockFrequency > 0 )
 					? mediaPayLoad.CustomClockFrequency
-					: ( label == "FLAC" ? DsdDataSPIFrequency : DataSPIFrequency );
+					: DataSPIFrequency;
 				this.spiDataDevice.ConnectionSettings.ClockFrequency = targetSdiClock;
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] {label}: SDI clock set to {targetSdiClock} Hz" );
 
 				Thread.Sleep( 20 );
 
-				if( label == "DSD" )
+				if( mediaPayLoad != null && mediaPayLoad.PatchType == PatchEngine.PatchType.Dsd )
 				{
 					SciWrite( Register.ClockFrequency, DsdClockf );
 					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] DSD: SCI_CLOCKF set to 0x{DsdClockf:X4}" );
@@ -716,7 +667,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] FLAC: SCI_MODE={sciMode:X4}, SCI_STATUS={sciStatus:X4}, SCI_AUDATA={sciAudata:X4}, WRAMADDR={sciWramAddr:X4}" );
 				}
 
-				bool applyStartupMode = mediaPayLoad != null ? mediaPayLoad.RequiresStartupMode : ( label != "FLAC" && label != "DSD" );
+				bool applyStartupMode =   mediaPayLoad ==  null   ||  mediaPayLoad.RequiresStartupMode  ;
 				byte startFillByte = mediaPayLoad != null ? mediaPayLoad.StartFillByte : EndFillByte;
 
 				StartSong( applyStartupMode, startFillByte );
@@ -724,14 +675,14 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Song started, streaming {label} data..." );
 
 				long totalBytesStreamed = 0;
-				bool dsdDetectionChecked = label != "DSD";
+				bool dsdDetectionChecked = mediaPayLoad == null || mediaPayLoad.PatchType != PatchEngine.PatchType.Dsd;
 
 				if( ReferenceEquals( mediaStream, fs ) )
 				{
 					fs.Position = dataStart;
 				}
 
-				int streamChunkSize = label == "DSD" ? 8192 : 4096;
+				int streamChunkSize = ( mediaPayLoad != null && mediaPayLoad.PatchType == PatchEngine.PatchType.Dsd ) ? 8192 : 4096;
 				var chunk = new byte[ streamChunkSize ];
 				int read;
 				long bytesRemaining = mediaStream.CanSeek ? ( totalFileBytes - dataStart ) : long.MaxValue;
@@ -753,8 +704,6 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					}
 
 					SdiWriteChunks( toWrite );
-
-
 				}
 
 				if( disposeMediaStream )
@@ -765,7 +714,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Streamed {totalBytesStreamed} bytes for {label}" );
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Sending {fillerBytes} filler bytes to {label} decoder..." );
 
-				if( label == "DSD" )
+				if( mediaPayLoad != null && mediaPayLoad.PatchType == PatchEngine.PatchType.Dsd )
 				{
 					SdiSendFillers( fillerBytes, DsdEndFillByte );
 				}

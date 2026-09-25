@@ -26,8 +26,8 @@ namespace Vs1053App
 
 			device.Initialize();
 
-			device.PlaySong( @"A:\Usa-Hymn.mid" );
-			device.PlaySong( @"A:\Thank You for the Music.mp3" );
+			//device.PlaySong( @"A:\Usa-Hymn.mid" );
+			device.PlaySong( @"A:\Abba- Thank You for the Music.mp3" );
 			device.PlaySong( @"A:\All by Myself.flac" );
 			device.PlaySong( @"A:\sample-12s.wav" );
 			device.PlaySong( @"A:\ogg_15s.ogg" );
