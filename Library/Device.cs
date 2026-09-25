@@ -63,10 +63,6 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 		/// </summary>
 		private const int ChunkSize = 32;
 		/// <summary>
-		/// Moderate chunk size used by AAC/ADTS streaming to reduce DREQ polling overhead without overdriving SDI.
-		/// </summary>
-		private const int AacSdiChunkSize = 32;
-		/// <summary>
 		/// DREQ poll interval in milliseconds. Lower values increase throughput but may cause timing issues.
 		/// For WAV playback (high bitrate), use 0 for busy-wait; for stability, use 1.
 		/// </summary>
@@ -127,6 +123,8 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 		private readonly PatchEngine patchEngine;
 
+		private readonly MidiEngine midiEngine;
+		private readonly string uartControllerName;
 		private enum Register : byte
 		{
 			/// <summary>
@@ -333,6 +331,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 		/// Startup SPI frequency is applied to both devices; higher SDI speed is configured later in <see cref="Initialize"/>.
 		/// </remarks>
 		public Device(
+			string uartControllerName,
 			string spiControllerName,
 			int cmdCsPinID,
 			int datCsPinID,
@@ -342,6 +341,8 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			int gpio1PinID = -1 )
 		{
 			this.patchEngine = new PatchEngine( this );
+			this.midiEngine = new MidiEngine( this );
+			this.uartControllerName = uartControllerName;
 
 			var gpioController = GpioController.GetDefault();
 			var spiController = SpiController.FromName( spiControllerName );
@@ -504,10 +505,17 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				".dsd"  => PlayFileCore( filePath, "DSD",  12288 ),
 				".dsf"  => PlayFileCore( filePath, "DSF",  12288 ),
 				".dff"  => PlayFileCore( filePath, "DFF",  12288 ),
+				".mid" or ".midi" => PlayMidiSong( filePath ),
 				_ => throw new NotSupportedException( $"Unsupported audio format: {fileInfo.Extension}" )
 			};
 
 			Thread.Sleep( 1000 );
+		}
+
+		private bool PlayMidiSong( string filePath )
+		{
+			this.midiEngine.Initialize( this.uartControllerName, startListener: false );
+			return this.midiEngine.PlayFileAndRestoreDecodeMode( filePath );
 		}
 
 		private void LogPlaybackState( string label, string stage )
@@ -550,7 +558,9 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 				long dataStart = 0;
 				long totalFileBytes = fs.Length;
-				Mp4AacTrackInfo m4aTrackInfo = null;
+				MediaPayLoad mediaPayLoad = null;
+				Stream mediaStream = fs;
+				bool disposeMediaStream = false;
 
 				if( label == "MP3" )
 				{
@@ -583,18 +593,16 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				{
 					this.patchEngine.LoadPlugin( patchType: PatchEngine.PatchType.StandardCodec );
 
-					dataStart = 0;
-					totalFileBytes = fs.Length;
+					IMediaPreprocessor m4aProcessor = new M4AProcessor();
+					mediaPayLoad = m4aProcessor.Process( fs );
 
-					LogMp4ContainerInfo( fs );
-
-					if( TryBuildMp4AacTrackInfo( fs, out m4aTrackInfo ) )
+					if( mediaPayLoad != null && mediaPayLoad.Stream != null )
 					{
-						Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] M4A: AAC track detected (samples={m4aTrackInfo.SampleSizes.Length}, sampleRate={m4aTrackInfo.SampleRate}, channels={m4aTrackInfo.ChannelCount})" );
-					}
-					else
-					{
-						Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] M4A warning: AAC track parsing failed; streaming container as-is." );
+						mediaStream = mediaPayLoad.Stream;
+						disposeMediaStream = !ReferenceEquals( mediaStream, fs );
+						fillerBytes = mediaPayLoad.FillerBytes;
+						dataStart = mediaStream.CanSeek ? mediaStream.Position : 0;
+						totalFileBytes = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
 					}
 				}
 				else if( label == "DSD" )
@@ -606,12 +614,12 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					LogDsdContainerInfo( fs );
 				}
 
-				if( dataStart >= fs.Length )
+				long streamLengthForValidation = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
+				if( dataStart >= streamLengthForValidation )
 				{
 					throw new InvalidOperationException( "Invalid media data start position." );
 				}
 
-				fs.Position = dataStart;
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] {label}: Total bytes to send={totalFileBytes}, starting at offset={dataStart}, fillers={fillerBytes}" );
 
 				// Patch-based formats keep their patch-provided runtime context.
@@ -625,13 +633,10 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] {label}: Skipping ConfigureStartupRegisters (patch context active)" );
 				}
 
-				if( label == "M4A" )
-				{
-					LogPlaybackState( label, "pre-start" );
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] M4A: verifying MP4 container signature before streaming" );
-				}
 
-				int targetSdiClock = label == "DSD" ? DsdDataSPIFrequency : DataSPIFrequency;
+				int targetSdiClock = ( mediaPayLoad != null && mediaPayLoad.CustomClockFrequency > 0 )
+					? mediaPayLoad.CustomClockFrequency
+					: ( label == "DSD" ? DsdDataSPIFrequency : DataSPIFrequency );
 				this.spiDataDevice.ConnectionSettings.ClockFrequency = targetSdiClock;
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] {label}: SDI clock set to {targetSdiClock} Hz" );
 
@@ -669,72 +674,60 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] FLAC: SCI_MODE={sciMode:X4}, SCI_STATUS={sciStatus:X4}, SCI_AUDATA={sciAudata:X4}, WRAMADDR={sciWramAddr:X4}" );
 				}
 
-				bool applyStartupMode = label != "FLAC" && label != "DSD";
-				byte startFillByte = label == "DSD" ? DsdEndFillByte : EndFillByte;
+				bool applyStartupMode = mediaPayLoad != null ? mediaPayLoad.RequiresStartupMode : ( label != "FLAC" && label != "DSD" );
+				byte startFillByte = mediaPayLoad != null ? mediaPayLoad.StartFillByte : ( label == "DSD" ? DsdEndFillByte : EndFillByte );
 
 				StartSong( applyStartupMode, startFillByte );
-
-				if( label == "M4A" )
-				{
-					LogPlaybackState( label, "post-start" );
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] M4A: MP4 container handoff complete" );
-				}
 
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Song started, streaming {label} data..." );
 
 				long totalBytesStreamed = 0;
 				bool dsdDetectionChecked = label != "DSD";
 
-				if( label == "M4A" && m4aTrackInfo != null )
+				if( ReferenceEquals( mediaStream, fs ) )
 				{
-					DateTime m4aStreamStart = DateTime.UtcNow;
-					if( TryStreamMp4AacAsAdts( fs, m4aTrackInfo, out totalBytesStreamed ) )
+					fs.Position = dataStart;
+				}
+
+				int streamChunkSize = label == "DSD" ? 8192 : 4096;
+				var chunk = new byte[ streamChunkSize ];
+				int read;
+				long bytesRemaining = mediaStream.CanSeek ? ( totalFileBytes - dataStart ) : long.MaxValue;
+
+				while( ( bytesRemaining > 0 || bytesRemaining == long.MaxValue )
+					&& ( read = mediaStream.Read( chunk, 0, bytesRemaining == long.MaxValue ? chunk.Length : ( int )Math.Min( chunk.Length, bytesRemaining ) ) ) > 0 )
+				{
+					byte[] toWrite = chunk;
+					if( read < chunk.Length )
 					{
-						TimeSpan elapsed = DateTime.UtcNow - m4aStreamStart;
-						double elapsedSeconds = Math.Max( elapsed.TotalSeconds, 0.001 );
-						double bytesPerSecond = totalBytesStreamed / elapsedSeconds;
-						Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] M4A ADTS stream phase: {totalBytesStreamed} bytes in {(int)elapsed.TotalMilliseconds} ms ({bytesPerSecond:F0} B/s)" );
+						toWrite = new byte[ read ];
+						Array.Copy( chunk, 0, toWrite, 0, read );
 					}
-					else
+
+					totalBytesStreamed += read;
+					if( bytesRemaining != long.MaxValue )
 					{
-						Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] M4A warning: AAC track streaming failed; falling back to raw container stream." );
-						totalBytesStreamed = 0;
+						bytesRemaining -= read;
+					}
+
+					SdiWriteChunks( toWrite );
+
+					if( !dsdDetectionChecked && totalBytesStreamed >= 131072 )
+					{
+						ushort liveHeaderData1 = SciRead( Register.StreamHeaderData1 );
+						Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] DSD live check: SCI_HDAT1=0x{liveHeaderData1:X4}" );
+						if( !IsDsdDetected( liveHeaderData1 ) )
+						{
+							Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] DSD live check warning: decoder has not reported 'DS'." );
+						}
+
+						dsdDetectionChecked = true;
 					}
 				}
 
-				if( totalBytesStreamed == 0 )
+				if( disposeMediaStream )
 				{
-					int streamChunkSize = label == "DSD" ? 8192 : 4096;
-					var chunk = new byte[ streamChunkSize ];
-					int read;
-					long bytesRemaining = totalFileBytes - dataStart;
-
-					while( bytesRemaining > 0 && ( read = fs.Read( chunk, 0, ( int )Math.Min( chunk.Length, bytesRemaining ) ) ) > 0 )
-					{
-						byte[] toWrite = chunk;
-						if( read < chunk.Length )
-						{
-							// Only resize if partial chunk at end
-							toWrite = new byte[ read ];
-							Array.Copy( chunk, 0, toWrite, 0, read );
-						}
-						totalBytesStreamed += read;
-						bytesRemaining -= read;
-
-						SdiWriteChunks( toWrite );
-
-						if( !dsdDetectionChecked && totalBytesStreamed >= 131072 )
-						{
-							ushort liveHeaderData1 = SciRead( Register.StreamHeaderData1 );
-							Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] DSD live check: SCI_HDAT1=0x{liveHeaderData1:X4}" );
-							if( !IsDsdDetected( liveHeaderData1 ) )
-							{
-								Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] DSD live check warning: decoder has not reported 'DS'." );
-							}
-
-							dsdDetectionChecked = true;
-						}
-					}
+					mediaStream.Dispose();
 				}
 
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Streamed {totalBytesStreamed} bytes for {label}" );
@@ -757,10 +750,6 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				ushort decodeTime = SciRead( Register.DecodeTime );
 
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Final state: HeaderData0={headerData0:X4}, HeaderData1={headerData1:X4}, DecodeTime={decodeTime}" );
-				if( label == "M4A" )
-				{
-					LogPlaybackState( label, "final" );
-				}
 
 				if( label == "DSD" && !IsDsdDetected( headerData1 ) )
 				{
@@ -1367,26 +1356,6 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				| ( buffer[ offset + 3 ] << 24 ) );
 		}
 
-		private static uint ReadUInt32BigEndian( byte[] buffer, int offset )
-		{
-			return ( uint )( ( buffer[ offset ] << 24 )
-				| ( buffer[ offset + 1 ] << 16 )
-				| ( buffer[ offset + 2 ] << 8 )
-				| buffer[ offset + 3 ] );
-		}
-
-		private static ulong ReadUInt64BigEndian( byte[] buffer, int offset )
-		{
-			return ( ( ulong )buffer[ offset ] << 56 )
-				| ( ( ulong )buffer[ offset + 1 ] << 48 )
-				| ( ( ulong )buffer[ offset + 2 ] << 40 )
-				| ( ( ulong )buffer[ offset + 3 ] << 32 )
-				| ( ( ulong )buffer[ offset + 4 ] << 24 )
-				| ( ( ulong )buffer[ offset + 5 ] << 16 )
-				| ( ( ulong )buffer[ offset + 6 ] << 8 )
-				| buffer[ offset + 7 ];
-		}
-
 		/// <summary>
 		/// Scans the beginning of an MP3 stream and returns the best data start offset.
 		/// </summary>
@@ -1448,578 +1417,6 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			}
 		}
 
-		private struct StscEntry
-		{
-			public uint FirstChunk;
-			public uint SamplesPerChunk;
-			public uint SampleDescriptionIndex;
-		}
-
-		private sealed class Mp4AacTrackInfo
-		{
-			public int SampleRate;
-			public int ChannelCount;
-			public int AacProfile = 2;
-			public uint[] SampleSizes = new uint[ 0 ];
-			public long[] ChunkOffsets = new long[ 0 ];
-			public StscEntry[] SampleToChunk = new StscEntry[ 0 ];
-		}
-
-		private static ushort ReadUInt16BigEndian( byte[] buffer, int offset )
-		{
-			return ( ushort )( ( buffer[ offset ] << 8 ) | buffer[ offset + 1 ] );
-		}
-
-		private static bool FindAtomInRange( FileStream fs, long rangeStart, long rangeEnd, string targetType, out long atomStart, out long payloadStart, out long atomEnd )
-		{
-			atomStart = 0;
-			payloadStart = 0;
-			atomEnd = 0;
-
-			long pos = rangeStart;
-			while( pos + 8 <= rangeEnd )
-			{
-				fs.Position = pos;
-				var header = new byte[ 16 ];
-				int got = fs.Read( header, 0, header.Length );
-				if( got < 8 )
-				{
-					return false;
-				}
-
-				uint size32 = ReadUInt32BigEndian( header, 0 );
-				string atomType = new string( new[] { ( char )header[ 4 ], ( char )header[ 5 ], ( char )header[ 6 ], ( char )header[ 7 ] } );
-				long headerSize = 8;
-				long atomSize = size32;
-
-				if( size32 == 1 )
-				{
-					if( got < 16 )
-					{
-						return false;
-					}
-
-					headerSize = 16;
-					atomSize = ( long )ReadUInt64BigEndian( header, 8 );
-				}
-				else if( size32 == 0 )
-				{
-					atomSize = rangeEnd - pos;
-				}
-
-				if( atomSize < headerSize )
-				{
-					return false;
-				}
-
-				long currentAtomEnd = pos + atomSize;
-				if( currentAtomEnd > rangeEnd )
-				{
-					currentAtomEnd = rangeEnd;
-				}
-
-				if( atomType == targetType )
-				{
-					atomStart = pos;
-					payloadStart = pos + headerSize;
-					atomEnd = currentAtomEnd;
-					return true;
-				}
-
-				pos += atomSize;
-			}
-
-			return false;
-		}
-
-		private static bool TryBuildMp4AacTrackInfo( FileStream fs, out Mp4AacTrackInfo trackInfo )
-		{
-			trackInfo = null;
-
-			long original = fs.Position;
-			try
-			{
-				if( !FindAtomInRange( fs, 0, fs.Length, "moov", out _, out long moovPayloadStart, out long moovAtomEnd ) )
-				{
-					return false;
-				}
-
-				long searchPos = moovPayloadStart;
-				while( FindAtomInRange( fs, searchPos, moovAtomEnd, "trak", out _, out long trakPayloadStart, out long trakAtomEnd ) )
-				{
-					if( TryParseMp4AacTrackInfo( fs, trakPayloadStart, trakAtomEnd, out trackInfo ) )
-					{
-						return true;
-					}
-
-					searchPos = trakAtomEnd;
-				}
-
-				return false;
-			}
-			finally
-			{
-				fs.Position = original;
-			}
-		}
-
-		private static bool TryParseMp4AacTrackInfo( FileStream fs, long trakPayloadStart, long trakAtomEnd, out Mp4AacTrackInfo trackInfo )
-		{
-			trackInfo = null;
-
-			if( !FindAtomInRange( fs, trakPayloadStart, trakAtomEnd, "mdia", out _, out long mdiaPayloadStart, out long mdiaAtomEnd ) )
-			{
-				return false;
-			}
-
-			if( !FindAtomInRange( fs, mdiaPayloadStart, mdiaAtomEnd, "hdlr", out _, out long hdlrPayloadStart, out long hdlrAtomEnd ) )
-			{
-				return false;
-			}
-
-			fs.Position = hdlrPayloadStart + 8;
-			var handler = new byte[ 4 ];
-			if( fs.Read( handler, 0, handler.Length ) < handler.Length )
-			{
-				return false;
-			}
-
-			if( handler[ 0 ] != ( byte )'s' || handler[ 1 ] != ( byte )'o' || handler[ 2 ] != ( byte )'u' || handler[ 3 ] != ( byte )'n' )
-			{
-				return false;
-			}
-
-			if( !FindAtomInRange( fs, mdiaPayloadStart, mdiaAtomEnd, "minf", out _, out long minfPayloadStart, out long minfAtomEnd ) )
-			{
-				return false;
-			}
-
-			if( !FindAtomInRange( fs, minfPayloadStart, minfAtomEnd, "stbl", out _, out long stblPayloadStart, out long stblAtomEnd ) )
-			{
-				return false;
-			}
-
-			if( !FindAtomInRange( fs, stblPayloadStart, stblAtomEnd, "stsd", out _, out long stsdPayloadStart, out long stsdAtomEnd ) )
-			{
-				return false;
-			}
-
-			fs.Position = stsdPayloadStart;
-			var stsdHeader = new byte[ 48 ];
-			if( fs.Read( stsdHeader, 0, stsdHeader.Length ) < 44 )
-			{
-				return false;
-			}
-
-			uint entryCount = ReadUInt32BigEndian( stsdHeader, 4 );
-			if( entryCount < 1 )
-			{
-				return false;
-			}
-
-			string sampleEntryType = new string( new[] { ( char )stsdHeader[ 12 ], ( char )stsdHeader[ 13 ], ( char )stsdHeader[ 14 ], ( char )stsdHeader[ 15 ] } );
-			if( sampleEntryType != "mp4a" )
-			{
-				return false;
-			}
-
-			var track = new Mp4AacTrackInfo();
-			track.ChannelCount = ReadUInt16BigEndian( stsdHeader, 32 );
-			track.SampleRate = ( int )( ReadUInt32BigEndian( stsdHeader, 40 ) >> 16 );
-
-			if( !FindAtomInRange( fs, stblPayloadStart, stblAtomEnd, "stsz", out _, out long stszPayloadStart, out _ ) )
-			{
-				return false;
-			}
-
-			fs.Position = stszPayloadStart;
-			var stszHeader = new byte[ 12 ];
-			if( fs.Read( stszHeader, 0, stszHeader.Length ) < stszHeader.Length )
-			{
-				return false;
-			}
-
-			uint constantSampleSize = ReadUInt32BigEndian( stszHeader, 4 );
-			uint sampleCount = ReadUInt32BigEndian( stszHeader, 8 );
-			if( sampleCount == 0 )
-			{
-				return false;
-			}
-
-			track.SampleSizes = new uint[ sampleCount ];
-			if( constantSampleSize != 0 )
-			{
-				for( int i = 0; i < track.SampleSizes.Length; i++ )
-				{
-					track.SampleSizes[ i ] = constantSampleSize;
-				}
-			}
-			else
-			{
-				var sizeBuffer = new byte[ 4 ];
-				for( int i = 0; i < track.SampleSizes.Length; i++ )
-				{
-					if( fs.Read( sizeBuffer, 0, sizeBuffer.Length ) < sizeBuffer.Length )
-					{
-						return false;
-					}
-
-					track.SampleSizes[ i ] = ReadUInt32BigEndian( sizeBuffer, 0 );
-				}
-			}
-
-			if( !FindAtomInRange( fs, stblPayloadStart, stblAtomEnd, "stsc", out _, out long stscPayloadStart, out _ ) )
-			{
-				return false;
-			}
-
-			fs.Position = stscPayloadStart;
-			var stscHeader = new byte[ 8 ];
-			if( fs.Read( stscHeader, 0, stscHeader.Length ) < stscHeader.Length )
-			{
-				return false;
-			}
-
-			uint stscEntryCount = ReadUInt32BigEndian( stscHeader, 4 );
-			if( stscEntryCount == 0 )
-			{
-				return false;
-			}
-
-			track.SampleToChunk = new StscEntry[ stscEntryCount ];
-			var stscEntryBuffer = new byte[ 12 ];
-			for( int i = 0; i < track.SampleToChunk.Length; i++ )
-			{
-				if( fs.Read( stscEntryBuffer, 0, stscEntryBuffer.Length ) < stscEntryBuffer.Length )
-				{
-					return false;
-				}
-
-				track.SampleToChunk[ i ] = new StscEntry
-				{
-					FirstChunk = ReadUInt32BigEndian( stscEntryBuffer, 0 ),
-					SamplesPerChunk = ReadUInt32BigEndian( stscEntryBuffer, 4 ),
-					SampleDescriptionIndex = ReadUInt32BigEndian( stscEntryBuffer, 8 )
-				};
-			}
-
-			if( FindAtomInRange( fs, stblPayloadStart, stblAtomEnd, "stco", out _, out long stcoPayloadStart, out _ ) )
-			{
-				fs.Position = stcoPayloadStart;
-				var stcoHeader = new byte[ 8 ];
-				if( fs.Read( stcoHeader, 0, stcoHeader.Length ) < stcoHeader.Length )
-				{
-					return false;
-				}
-
-				uint chunkCount = ReadUInt32BigEndian( stcoHeader, 4 );
-				if( chunkCount == 0 )
-				{
-					return false;
-				}
-
-				track.ChunkOffsets = new long[ chunkCount ];
-				var offsetBuffer = new byte[ 4 ];
-				for( int i = 0; i < track.ChunkOffsets.Length; i++ )
-				{
-					if( fs.Read( offsetBuffer, 0, offsetBuffer.Length ) < offsetBuffer.Length )
-					{
-						return false;
-					}
-
-					track.ChunkOffsets[ i ] = ReadUInt32BigEndian( offsetBuffer, 0 );
-				}
-			}
-			else if( FindAtomInRange( fs, stblPayloadStart, stblAtomEnd, "co64", out _, out long co64PayloadStart, out _ ) )
-			{
-				fs.Position = co64PayloadStart;
-				var co64Header = new byte[ 8 ];
-				if( fs.Read( co64Header, 0, co64Header.Length ) < co64Header.Length )
-				{
-					return false;
-				}
-
-				uint chunkCount = ReadUInt32BigEndian( co64Header, 4 );
-				if( chunkCount == 0 )
-				{
-					return false;
-				}
-
-				track.ChunkOffsets = new long[ chunkCount ];
-				var offsetBuffer = new byte[ 8 ];
-				for( int i = 0; i < track.ChunkOffsets.Length; i++ )
-				{
-					if( fs.Read( offsetBuffer, 0, offsetBuffer.Length ) < offsetBuffer.Length )
-					{
-						return false;
-					}
-
-					track.ChunkOffsets[ i ] = ( long )ReadUInt64BigEndian( offsetBuffer, 0 );
-				}
-			}
-			else
-			{
-				return false;
-			}
-
-			if( track.ChunkOffsets.Length == 0 || track.SampleSizes.Length == 0 )
-			{
-				return false;
-			}
-
-			trackInfo = track;
-			return true;
-		}
-
-		private static uint GetSamplesPerChunk( StscEntry[] entries, uint chunkNumber )
-		{
-			if( entries == null || entries.Length == 0 )
-			{
-				return 0;
-			}
-
-			StscEntry current = entries[ 0 ];
-			for( int i = 1; i < entries.Length; i++ )
-			{
-				if( chunkNumber < entries[ i ].FirstChunk )
-				{
-					break;
-				}
-
-				current = entries[ i ];
-			}
-
-			return current.SamplesPerChunk;
-		}
-
-		private static bool TryBuildAdtsHeader( byte[] header, int sampleRate, int channelCount, int sampleSize )
-		{
-			if( header == null || header.Length < 7 )
-			{
-				return false;
-			}
-
-			if( sampleSize < 0 || channelCount < 1 || channelCount > 7 )
-			{
-				return false;
-			}
-
-			int sampleRateIndex = GetAacSampleRateIndex( sampleRate );
-			if( sampleRateIndex < 0 )
-			{
-				return false;
-			}
-
-			int profile = 1;
-			int frameLength = sampleSize + 7;
-			if( frameLength > 0x1FFF )
-			{
-				return false;
-			}
-
-			header[ 0 ] = 0xFF;
-			header[ 1 ] = 0xF1;
-			header[ 2 ] = ( byte )( ( profile << 6 ) | ( sampleRateIndex << 2 ) | ( ( channelCount >> 2 ) & 0x01 ) );
-			header[ 3 ] = ( byte )( ( ( channelCount & 0x03 ) << 6 ) | ( ( frameLength >> 11 ) & 0x03 ) );
-			header[ 4 ] = ( byte )( ( frameLength >> 3 ) & 0xFF );
-			header[ 5 ] = ( byte )( ( ( frameLength & 0x07 ) << 5 ) | 0x1F );
-			header[ 6 ] = 0xFC;
-			return true;
-		}
-
-		private static int GetAacSampleRateIndex( int sampleRate )
-		{
-			switch( sampleRate )
-			{
-				case 96000: return 0;
-				case 88200: return 1;
-				case 64000: return 2;
-				case 48000: return 3;
-				case 44100: return 4;
-				case 32000: return 5;
-				case 24000: return 6;
-				case 22050: return 7;
-				case 16000: return 8;
-				case 12000: return 9;
-				case 11025: return 10;
-				case 8000: return 11;
-				case 7350: return 12;
-				default: return -1;
-			}
-		}
-
-		private bool TryStreamMp4AacAsAdts( FileStream fs, Mp4AacTrackInfo trackInfo, out long payloadBytesWritten )
-		{
-			payloadBytesWritten = 0;
-
-			if( trackInfo == null || trackInfo.SampleSizes == null || trackInfo.SampleSizes.Length == 0 || trackInfo.ChunkOffsets == null || trackInfo.ChunkOffsets.Length == 0 )
-			{
-				return false;
-			}
-
-			if( trackInfo.SampleRate <= 0 || trackInfo.ChannelCount < 1 || trackInfo.ChannelCount > 7 )
-			{
-				return false;
-			}
-
-			var adtsHeader = new byte[ 7 ];
-			var directSampleBuffer = new byte[ 4096 ];
-			var frameBuffer = new byte[ 8192 ];
-			int frameBufferPos = 0;
-			int sampleIndex = 0;
-
-			for( int chunkIndex = 0; chunkIndex < trackInfo.ChunkOffsets.Length && sampleIndex < trackInfo.SampleSizes.Length; chunkIndex++ )
-			{
-				uint samplesPerChunk = GetSamplesPerChunk( trackInfo.SampleToChunk, ( uint )( chunkIndex + 1 ) );
-				if( samplesPerChunk == 0 )
-				{
-					return false;
-				}
-
-				long samplePos = trackInfo.ChunkOffsets[ chunkIndex ];
-				for( uint sampleInChunk = 0; sampleInChunk < samplesPerChunk && sampleIndex < trackInfo.SampleSizes.Length; sampleInChunk++ )
-				{
-					int sampleSize = ( int )trackInfo.SampleSizes[ sampleIndex++ ];
-					if( sampleSize <= 0 )
-					{
-						return false;
-					}
-
-					if( !TryBuildAdtsHeader( adtsHeader, trackInfo.SampleRate, trackInfo.ChannelCount, sampleSize ) )
-					{
-						return false;
-					}
-
-					if( sampleSize + adtsHeader.Length > frameBuffer.Length )
-					{
-						if( frameBufferPos > 0 )
-						{
-							SdiWriteChunks( frameBuffer, 0, frameBufferPos, AacSdiChunkSize );
-							frameBufferPos = 0;
-						}
-
-						SdiWriteChunks( adtsHeader, 0, adtsHeader.Length, adtsHeader.Length );
-
-						fs.Position = samplePos;
-						int remaining = sampleSize;
-						while( remaining > 0 )
-						{
-							int toRead = Math.Min( directSampleBuffer.Length, remaining );
-							int read = fs.Read( directSampleBuffer, 0, toRead );
-							if( read <= 0 )
-							{
-								return false;
-							}
-
-							SdiWriteChunks( directSampleBuffer, 0, read, AacSdiChunkSize );
-							remaining -= read;
-							samplePos += read;
-							payloadBytesWritten += read;
-						}
-					}
-					else
-					{
-						if( frameBufferPos + adtsHeader.Length + sampleSize > frameBuffer.Length )
-						{
-							if( frameBufferPos > 0 )
-							{
-								SdiWriteChunks( frameBuffer, 0, frameBufferPos, AacSdiChunkSize );
-								frameBufferPos = 0;
-							}
-						}
-
-						Array.Copy( adtsHeader, 0, frameBuffer, frameBufferPos, adtsHeader.Length );
-						frameBufferPos += adtsHeader.Length;
-
-						fs.Position = samplePos;
-						int remaining = sampleSize;
-						while( remaining > 0 )
-						{
-							if( frameBufferPos == frameBuffer.Length )
-							{
-								SdiWriteChunks( frameBuffer, 0, frameBufferPos, AacSdiChunkSize );
-								frameBufferPos = 0;
-							}
-
-							int toRead = Math.Min( frameBuffer.Length - frameBufferPos, remaining );
-							int read = fs.Read( frameBuffer, frameBufferPos, toRead );
-							if( read <= 0 )
-							{
-								return false;
-							}
-
-							frameBufferPos += read;
-							remaining -= read;
-							samplePos += read;
-							payloadBytesWritten += read;
-
-							if( frameBufferPos == frameBuffer.Length )
-							{
-								SdiWriteChunks( frameBuffer, 0, frameBufferPos, AacSdiChunkSize );
-								frameBufferPos = 0;
-							}
-						}
-					}
-				}
-			}
-
-			if( frameBufferPos > 0 )
-			{
-				SdiWriteChunks( frameBuffer, 0, frameBufferPos, AacSdiChunkSize );
-			}
-
-			return sampleIndex == trackInfo.SampleSizes.Length;
-		}
-
-		/// <summary>
-		/// Scans an MP4/M4A stream for container metadata and logs the visible atoms.
-		/// </summary>
-		/// <param name="fs">Open file stream positioned anywhere.</param>
-		private static void LogMp4ContainerInfo( FileStream fs )
-		{
-			long original = fs.Position;
-			try
-			{
-				if( fs.Length < 16 )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] M4A: file too small for MP4 container diagnostics." );
-					return;
-				}
-
-				fs.Position = 0;
-				var header = new byte[ 16 ];
-				int got = fs.Read( header, 0, header.Length );
-				if( got < 8 )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] M4A: unable to read MP4 header." );
-					return;
-				}
-
-				uint atomSize = ReadUInt32BigEndian( header, 0 );
-				string atomType = new string( new[] { ( char )header[ 4 ], ( char )header[ 5 ], ( char )header[ 6 ], ( char )header[ 7 ] } );
-				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] M4A: first atom='{atomType}', size={atomSize}" );
-
-				if( atomType != "ftyp" )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] M4A warning: MP4 container does not start with 'ftyp'." );
-				}
-				else if( got >= 16 )
-				{
-					string majorBrand = new string( new[] { ( char )header[ 8 ], ( char )header[ 9 ], ( char )header[ 10 ], ( char )header[ 11 ] } );
-					uint minorVersion = ReadUInt32BigEndian( header, 12 );
-					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] M4A: majorBrand='{majorBrand}', minorVersion=0x{minorVersion:X8}" );
-				}
-			}
-			finally
-			{
-				fs.Position = original;
-			}
-		}
-
-		/// <summary>
-		/// Scans the beginning of an MP3 stream and returns the best data start offset.
-		/// </summary>
-
 		/// <summary>
 		/// Finds the size of the data chunk in a WAV file.
 		/// </summary>
@@ -2028,10 +1425,12 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 		private static long FindWavDataChunkSize( FileStream fs )
 		{
 			long original = fs.Position;
+
 			try
 			{
 				fs.Position = 0;
 				var header = new byte[ 12 ];
+
 				if( fs.Read( header, 0, header.Length ) < 12 )
 					return 0;
 
@@ -2041,6 +1440,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				while( pos + 8 <= fs.Length )
 				{
 					fs.Position = pos;
+
 					if( fs.Read( chunkHeader, 0, 8 ) < 8 )
 						break;
 
@@ -2051,7 +1451,12 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 									(char)chunkHeader[ 2 ],
 									(char)chunkHeader[ 3 ]
 					} );
-					uint chunkSize = ( uint )( chunkHeader[ 4 ] | ( chunkHeader[ 5 ] << 8 ) | ( chunkHeader[ 6 ] << 16 ) | ( chunkHeader[ 7 ] << 24 ) );
+
+					uint chunkSize = 
+						( uint )( chunkHeader[ 4 ] | 
+							( chunkHeader[ 5 ] << 8 ) | 
+							( chunkHeader[ 6 ] << 16 ) | 
+							( chunkHeader[ 7 ] << 24 ) );
 
 					if( chunkId == "data" )
 						return chunkSize;

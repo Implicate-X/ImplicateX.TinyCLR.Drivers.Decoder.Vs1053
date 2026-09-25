@@ -12,6 +12,7 @@ namespace Vs1053App
 			_ = new Storage();
 
 			device = new Device(
+				uartControllerName: FEZDuino.UartPort.Uart1,
 				spiControllerName: FEZDuino.SpiBus.Spi6,
 				cmdCsPinID: FEZDuino.GpioPin.PC4,
 				datCsPinID: FEZDuino.GpioPin.PC5,
@@ -22,11 +23,13 @@ namespace Vs1053App
 
 			device.Initialize();
 
-			device.PlaySong( @"A:\sample-100kb.mp3" );
-			device.PlaySong( @"A:\sample-3s.wav" );
-			device.PlaySong( @"A:\sample-1mb.flac" );
-			device.PlaySong( @"A:\ogg_15s.ogg" );
-			device.PlaySong( @"A:\aac_15s.aac" );
+			//device.PlaySong( @"A:\short.mid" );
+			//device.PlaySong( @"A:\short.mp3" );
+			//device.PlaySong( @"A:\sample-3s.wav" );
+			//device.PlaySong( @"A:\sample-1mb.flac" );
+			//device.PlaySong( @"A:\usa-hymn.mid" );
+			//device.PlaySong( @"A:\ogg_15s.ogg" );
+			//device.PlaySong( @"A:\aac_15s.aac" );
 			device.PlaySong( @"A:\m4a_15s.m4a" );
 		}
 	}

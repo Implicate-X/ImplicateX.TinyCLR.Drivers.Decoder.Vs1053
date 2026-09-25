@@ -39,6 +39,9 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="IMediaPreprocessor.cs" />
+    <Compile Include="M4AProcessor.cs" />
+    <Compile Include="MediaPayLoad.cs" />
     <Compile Include="PatchEngine.cs" />
     <Compile Include="Plugins.Designer.cs">
       <AutoGen>True</AutoGen>
@@ -50,16 +53,7 @@
     <Compile Include="MidiEngine.cs" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="patches\Convert-PlgToBinary.ps1" />
-    <None Include="patches\Convert-PlgToCSharp.ps1" />
     <None Include="packages.config" />
-    <None Include="patches\vs1053b-patches-dsd.cmd" />
-    <None Include="patches\vs1053b-patches-flac-latm.cmd" />
-    <None Include="patches\vs1053b-patches-flac.cmd" />
-    <None Include="patches\vs1053b-patches-latm.cmd" />
-    <None Include="patches\vs1053b-patches-pitch.cmd" />
-    <None Include="patches\vs1053b-patches.cmd" />
-    <None Include="patches\vs1053b-patches.pdf" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="GHIElectronics.TinyCLR.Devices.Gpio, Version=3.0.2.1000, Culture=neutral, processorArchitecture=MSIL">
@@ -87,16 +81,6 @@
     <Reference Include="System.IO.Ports, Version=3.0.2.1000, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>packages\GHIElectronics.TinyCLR.Devices.Uart.3.0.2.1000\lib\net48\System.IO.Ports.dll</HintPath>
     </Reference>
-  </ItemGroup>
-  <ItemGroup>
-    <Content Include="license.txt" />
-    <Content Include="patches\vs1053b-patches-dsd.c" />
-    <Content Include="patches\vs1053b-patches-flac-latm.c" />
-    <Content Include="patches\vs1053b-patches-flac.c" />
-    <Content Include="patches\vs1053b-patches-latm.c" />
-    <Content Include="patches\vs1053b-patches-pitch.c" />
-    <Content Include="patches\vs1053b-patches.c" />
-    <Content Include="patches\vs1053b-patches.txt" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Plugins.resx">

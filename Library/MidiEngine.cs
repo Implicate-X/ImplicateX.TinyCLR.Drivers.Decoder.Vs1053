@@ -66,23 +66,19 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			/// Initializes UART MIDI transport and applies the VS1053 real-time MIDI boot pin and reset sequence.
 			/// </summary>
 			/// <remarks>
-			/// When <paramref name="uartPortName"/> is null or empty, UART MIDI is disabled and the driver
+			/// When <paramref name="uartControllerName"/> is null or empty, UART MIDI is disabled and the driver
 			/// continues using the SDI fallback path only.
 			/// </remarks>
-			/// <param name="uartPortName">TinyCLR UART controller name used for 31,250 baud MIDI traffic.</param>
-			public void Initialize( string uartPortName )
+			/// <param name="uartControllerName">TinyCLR UART controller name used for 31,250 baud MIDI traffic.</param>
+			/// <param name="startListener">True to start UART receive listener; false to skip listener startup.</param>
+			public void Initialize( string uartControllerName, bool startListener = true )
 			{
 				try
 				{
 					StopUartListener();
+					CloseUartPort();
 
-					if( this.port != null )
-					{
-						try { this.port.Close(); } catch { }
-						this.port = null;
-					}
-
-					if( string.IsNullOrEmpty( uartPortName ) )
+					if( string.IsNullOrEmpty( uartControllerName ) )
 					{
 						Debug.WriteLineIf( EnableVerboseTrace, "UART MIDI disabled, using SDI path." );
 						return;
@@ -92,7 +88,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					this.bootstrapFailed = false;
 					this.hardwareRealtimeMode = false;
 
-					this.port = new SerialPort( uartPortName )
+					this.port = new SerialPort( uartControllerName )
 					{
 						BaudRate = 31250,
 						Parity = Parity.None,
@@ -102,18 +98,24 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					};
 
 					this.port.Open();
-					Debug.WriteLineIf( EnableVerboseTrace, "UART MIDI port opened: " + uartPortName );
+					Debug.WriteLineIf( EnableVerboseTrace, "UART MIDI port opened: " + uartControllerName );
 
 					ConfigureRealtimeBootPinsAndReset();
-					StartUartListener();
+
+					if( startListener )
+					{
+						StartUartListener();
+					}
+					else
+					{
+						Debug.WriteLineIf( EnableVerboseTrace, "UART MIDI listener disabled for this initialization." );
+					}
 				}
 				catch( Exception ex )
 				{
 					Debug.WriteLineIf( EnableVerboseTrace, "Failed to initialize UART MIDI: " + ex.Message );
-					try { this.port.Close(); } catch { }
-					this.port = null;
-
 					StopUartListener();
+					CloseUartPort();
 				}
 			}
 
@@ -124,6 +126,27 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			/// Applies GPIO0 low and GPIO1 high before reset sampling when both pins are available,
 			/// which is required for hardware real-time MIDI boot mode.
 			/// </remarks>
+			private void CloseUartPort()
+			{
+				if( this.port == null )
+				{
+					return;
+				}
+
+				try
+				{
+					if( this.port.IsOpen )
+					{
+						this.port.Close();
+					}
+				}
+				catch { }
+				finally
+				{
+					this.port = null;
+				}
+			}
+
 			private void ConfigureRealtimeBootPinsAndReset()
 			{
 				try
@@ -491,12 +514,13 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					int needed = 0;
 					byte[] dataBuf = new byte[ 2 ];
 					int dataIdx = 0;
+					SerialPort localPort = this.port;
 
-					while( this.listenerRunning && this.port != null && this.port.IsOpen )
+					while( this.listenerRunning && localPort != null && localPort.IsOpen )
 					{
 						try
 						{
-							int v = this.port.ReadByte();
+							int v = localPort.ReadByte();
 
 							if( v < 0 )
 							{
@@ -519,7 +543,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 								while( true )
 								{
-									int vb = this.port.ReadByte();
+									int vb = localPort.ReadByte();
 
 									if( vb < 0 ) break;
 
@@ -593,7 +617,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				{
 					if( this.listenerThread != null )
 					{
-						this.listenerThread.Join( 100 );
+						this.listenerThread.Join( 500 );
 					}
 				}
 				catch { }
@@ -739,7 +763,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			/// <param name="filePath">Path to the MIDI file.</param>
 			/// <param name="maxDeltaMs">Optional maximum delay applied between events, or 0 for no cap.</param>
 			/// <param name="playbackStatus">Optional callback for playback progress messages.</param>
-			public void PlayFile( string filePath, int maxDeltaMs = 0, Action<string> playbackStatus = null )
+			public bool PlayFile( string filePath, int maxDeltaMs = 0, Action<string> playbackStatus = null )
 			{
 				playbackStatus?.Invoke( "Preparing MIDI playback..." );
 
@@ -769,7 +793,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					if( trackCount <= 0 )
 					{
 						playbackStatus?.Invoke( "No tracks to play." );
-						return;
+						return false;
 					}
 
 					int pos = 8 + headerLength;
@@ -883,7 +907,56 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				catch( Exception ex )
 				{
 					playbackStatus?.Invoke( "Playback failed: " + ex.Message );
-					throw;
+					return false;
+				}
+
+				return true;
+			}
+
+			/// <summary>
+			/// Plays a MIDI file and restores the decoder to standard audio mode afterwards.
+			/// </summary>
+			/// <param name="filePath">Path to the MIDI file.</param>
+			/// <param name="maxDeltaMs">Optional maximum delay applied between events, or 0 for no cap.</param>
+			/// <param name="playbackStatus">Optional callback for playback progress messages.</param>
+			public bool PlayFileAndRestoreDecodeMode( string filePath, int maxDeltaMs = 0, Action<string> playbackStatus = null )
+			{
+				try
+				{
+					return PlayFile( filePath, maxDeltaMs, playbackStatus );
+				}
+				finally
+				{
+					RestoreDecodeMode();
+				}
+			}
+
+			private void RestoreDecodeMode()
+			{
+				try
+				{
+					StopUartListener();
+					CloseUartPort();
+
+					if( device.gpio0Pin != null && device.gpio1Pin != null )
+					{
+						device.gpio0Pin.SetDriveMode( GpioPinDriveMode.Output );
+						device.gpio1Pin.SetDriveMode( GpioPinDriveMode.Output );
+						device.gpio0Pin.Write( GpioPinValue.Low );
+						device.gpio1Pin.Write( GpioPinValue.Low );
+						Thread.Sleep( 1 );
+						device.gpio0Pin.SetDriveMode( GpioPinDriveMode.InputPullDown );
+						device.gpio1Pin.SetDriveMode( GpioPinDriveMode.InputPullDown );
+					}
+
+					device.Initialize();
+				}
+				finally
+				{
+					this.modeInitialized = false;
+					this.bootstrapAttempted = false;
+					this.bootstrapFailed = false;
+					this.hardwareRealtimeMode = false;
 				}
 			}
 
