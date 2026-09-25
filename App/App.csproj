@@ -49,12 +49,6 @@
     <Compile Include="Storage.cs" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Library\Library.csproj">
-      <Project>{6898551B-EE98-4F02-B3E7-19407BC4E5DB}</Project>
-      <Name>Library</Name>
-    </ProjectReference>
-  </ItemGroup>
-  <ItemGroup>
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
@@ -88,6 +82,12 @@
     <Reference Include="System.Device.Spi, Version=3.0.2.1000, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\GHIElectronics.TinyCLR.Devices.Spi.3.0.2.1000\lib\net48\System.Device.Spi.dll</HintPath>
     </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Library\Library.csproj">
+      <Project>{6898551B-EE98-4F02-B3E7-19407BC4E5DB}</Project>
+      <Name>Library</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">

@@ -4,29 +4,82 @@ using System.IO;
 
 namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 {
-	public sealed class M4AProcessor : IMediaPreprocessor
+	/// <summary>
+	/// Preprocesses `.m4a` media streams for VS1053 playback.
+	/// </summary>
+	/// <remarks>
+	/// The processor inspects an MP4/M4A container for an AAC (`mp4a`) audio track and,
+	/// when possible, exposes the payload as an on-the-fly ADTS stream.
+	/// If parsing or transcoding fails, the original container stream is returned unchanged.
+	/// </remarks>
+	public sealed class M4aProcessor : IMediaPreprocessor
 	{
+		/// <summary>
+		/// Enables additional diagnostic trace output when set to <see langword="true"/>.
+		/// </summary>
 		private const bool EnableVerboseTrace = false;
 
+		/// <summary>
+		/// Represents a single `stsc` (sample-to-chunk) table entry.
+		/// </summary>
 		private struct StscEntry
 		{
+			/// <summary>
+			/// 1-based index of the first chunk to which this mapping applies.
+			/// </summary>
 			public uint FirstChunk;
+
+			/// <summary>
+			/// Number of AAC samples stored in each chunk for this mapping range.
+			/// </summary>
 			public uint SamplesPerChunk;
+
+			/// <summary>
+			/// Sample description index referenced by this mapping.
+			/// </summary>
 			public uint SampleDescriptionIndex;
+
 		}
 
-		private sealed class Mp4AacTrackInfo
+		/// <summary>
+		/// Holds parsed AAC track metadata extracted from MP4 atoms.
+		/// </summary>
+		private sealed class Mp4aAcTrackInfo
 		{
+			/// <summary>Track sample rate in Hz.</summary>
 			public int SampleRate;
+
+			/// <summary>Number of audio channels.</summary>
 			public int ChannelCount;
+
+			/// <summary>Per-sample payload sizes from `stsz`.</summary>
 			public uint[] SampleSizes = new uint[ 0 ];
+
+			/// <summary>Chunk byte offsets from `stco`/`co64`.</summary>
 			public long[] ChunkOffsets = new long[ 0 ];
+
+			/// <summary>Sample-to-chunk mapping entries from `stsc`.</summary>
 			public StscEntry[] SampleToChunk = new StscEntry[ 0 ];
 		}
 
-		public bool CanProcess( string extension )
+		/// <summary>
+		/// Determines whether this processor supports the given file extension.
+		/// </summary>
+		/// <param name="extension">File extension including leading dot.</param>
+		/// <returns><see langword="true"/> for `.m4a`; otherwise <see langword="false"/>.</returns>
+		public bool CanProcess( string extension ) 
 			=> extension != null && extension.ToLower() == ".m4a";
 
+		/// <summary>
+		/// Processes an M4A stream and returns a playback payload.
+		/// </summary>
+		/// <param name="fs">Input M4A file stream.</param>
+		/// <returns>
+		/// A <see cref="MediaPayLoad"/> containing either:
+		/// 1) an on-demand ADTS transcoding stream for raw AAC playback, or
+		/// 2) the original container stream as fallback.
+		/// </returns>
+		/// <exception cref="ArgumentNullException">Thrown when <paramref name="fs"/> is <see langword="null"/>.</exception>
 		public MediaPayLoad Process( FileStream fs )
 		{
 			if( fs == null )
@@ -36,7 +89,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 			LogMp4ContainerInfo( fs );
 
-			if( TryBuildMp4AacTrackInfo( fs, out Mp4AacTrackInfo trackInfo ) )
+			if( TryBuildMp4aAcTrackInfo( fs, out Mp4aAcTrackInfo trackInfo ) )
 			{
 				Debug.WriteLineIf( EnableVerboseTrace, $"[M4AProcessor] AAC track detected (samples={trackInfo.SampleSizes.Length}, sampleRate={trackInfo.SampleRate}, channels={trackInfo.ChannelCount})." );
 
@@ -69,7 +122,13 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			);
 		}
 
-		private static Stream BuildAdtsStream( FileStream fs, Mp4AacTrackInfo trackInfo )
+		/// <summary>
+		/// Validates parsed track information and creates an ADTS transcoding stream.
+		/// </summary>
+		/// <param name="fs">Source MP4 stream.</param>
+		/// <param name="trackInfo">Parsed AAC track metadata.</param>
+		/// <returns>A readable ADTS stream when valid; otherwise <see langword="null"/>.</returns>
+		private static Stream BuildAdtsStream( FileStream fs, Mp4aAcTrackInfo trackInfo )
 		{
 			if( trackInfo == null || trackInfo.SampleSizes == null || trackInfo.SampleSizes.Length == 0 || trackInfo.ChunkOffsets == null || trackInfo.ChunkOffsets.Length == 0 )
 			{
@@ -89,10 +148,18 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			return new AdtsTranscodingStream( fs, trackInfo );
 		}
 
+		/// <summary>
+		/// Read-only stream that emits AAC frames with synthesized ADTS headers.
+		/// </summary>
+		/// <remarks>
+		/// This stream performs lazy transcoding: each read emits a 7-byte ADTS header
+		/// followed by the corresponding AAC sample bytes from the source MP4 file.
+		/// Seeking is not supported.
+		/// </remarks>
 		private sealed class AdtsTranscodingStream : Stream
 		{
 			private readonly FileStream source;
-			private readonly Mp4AacTrackInfo trackInfo;
+			private readonly Mp4aAcTrackInfo trackInfo;
 			private readonly byte[] headerBuffer = new byte[ 7 ];
 			private readonly long streamLength;
 
@@ -107,7 +174,12 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			private bool eos;
 			private long emittedBytes;
 
-			public AdtsTranscodingStream( FileStream source, Mp4AacTrackInfo trackInfo )
+			/// <summary>
+			/// Initializes the transcoding stream over a source MP4 file.
+			/// </summary>
+			/// <param name="source">Underlying source stream.</param>
+			/// <param name="trackInfo">AAC track metadata used to map sample positions.</param>
+			public AdtsTranscodingStream( FileStream source, Mp4aAcTrackInfo trackInfo )
 			{
 				this.source = source ?? throw new ArgumentNullException( nameof( source ) );
 				this.trackInfo = trackInfo ?? throw new ArgumentNullException( nameof( trackInfo ) );
@@ -127,12 +199,22 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			public override bool CanWrite => false;
 			public override long Length => this.streamLength;
 
+			/// <summary>
+			/// Gets the current position in the ADTS stream, which is the total number of bytes emitted so far.
+			/// </summary>
 			public override long Position
 			{
 				get => this.emittedBytes;
 				set => throw new NotSupportedException();
 			}
 
+			/// <summary>
+			/// Reads ADTS-framed bytes into the target buffer.
+			/// </summary>
+			/// <param name="buffer">Destination buffer.</param>
+			/// <param name="offset">Destination offset.</param>
+			/// <param name="count">Maximum bytes to read.</param>
+			/// <returns>Number of bytes written, or 0 when end-of-stream is reached.</returns>
 			public override int Read( byte[] buffer, int offset, int count )
 			{
 				if( buffer == null )
@@ -176,7 +258,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					{
 						if( this.samplePosition < 0 || this.samplePosition >= this.source.Length )
 						{
-							Debug.WriteLineIf( EnableVerboseTrace, $"[M4AProcessor] Invalid sample read position {this.samplePosition}." );
+							Debug.WriteLineIf( EnableVerboseTrace, $"[M4aProcessor] Invalid sample read position {this.samplePosition}." );
 							this.eos = true;
 							break;
 						}
@@ -186,7 +268,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 						int read = this.source.Read( buffer, offset, toRead );
 						if( read <= 0 )
 						{
-							Debug.WriteLineIf( EnableVerboseTrace, "[M4AProcessor] Unexpected end of source while streaming AAC sample." );
+							Debug.WriteLineIf( EnableVerboseTrace, "[M4aProcessor] Unexpected end of source while streaming AAC sample." );
 							this.eos = true;
 							break;
 						}
@@ -204,6 +286,10 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				return written;
 			}
 
+			/// <summary>
+			/// Ensures that the current AAC sample and ADTS header are prepared for reading.
+			/// </summary>
+			/// <returns><see langword="true"/> when data is ready; otherwise <see langword="false"/>.</returns>
 			private bool EnsureCurrentSamplePrepared()
 			{
 				if( this.eos )
@@ -241,7 +327,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 					this.samplePosition = this.trackInfo.ChunkOffsets[ this.chunkIndex ];
 					if( this.samplePosition < 0 || this.samplePosition >= this.source.Length )
 					{
-						Debug.WriteLineIf( EnableVerboseTrace, $"[M4AProcessor] Chunk offset out of bounds: {this.samplePosition}." );
+						Debug.WriteLineIf( EnableVerboseTrace, $"[M4aProcessor] Chunk offset out of bounds: {this.samplePosition}." );
 						this.eos = true;
 						return false;
 					}
@@ -263,7 +349,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 				if( this.samplePosition + sampleSize > this.source.Length )
 				{
-					Debug.WriteLineIf( EnableVerboseTrace, $"[M4AProcessor] Sample range out of bounds: pos={this.samplePosition}, size={sampleSize}, sourceLen={this.source.Length}." );
+					Debug.WriteLineIf( EnableVerboseTrace, $"[M4aProcessor] Sample range out of bounds: pos={this.samplePosition}, size={sampleSize}, sourceLen={this.source.Length}." );
 					this.eos = true;
 					return false;
 				}
@@ -275,26 +361,54 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				return true;
 			}
 
+			/// <summary>
+			/// Flush is a no-op for this read-only stream.
+			/// </summary>
 			public override void Flush()
 			{
 			}
 
+			/// <summary>
+			/// Seeking is not supported for this stream.
+			/// </summary>
+			/// <param name="offset"></param>
+			/// <param name="origin"></param>
+			/// <returns></returns>
+			/// <exception cref="NotSupportedException"></exception>
 			public override long Seek( long offset, SeekOrigin origin )
 			{
 				throw new NotSupportedException();
 			}
 
+			/// <summary>
+			/// Setting the length is not supported for this stream.
+			/// </summary>
+			/// <param name="value"></param>
+			/// <exception cref="NotSupportedException"></exception>
 			public override void SetLength( long value )
 			{
 				throw new NotSupportedException();
 			}
 
+			/// <summary>
+			/// Writing is not supported for this read-only stream.
+			/// </summary>
+			/// <param name="buffer"></param>
+			/// <param name="offset"></param>
+			/// <param name="count"></param>
+			/// <exception cref="NotSupportedException"></exception>
 			public override void Write( byte[] buffer, int offset, int count )
 			{
 				throw new NotSupportedException();
 			}
 		}
 
+		/// <summary>
+		/// Resolves how many samples are stored in the specified chunk.
+		/// </summary>
+		/// <param name="entries">`stsc` mapping entries.</param>
+		/// <param name="chunkNumber">1-based chunk number.</param>
+		/// <returns>Samples per chunk, or 0 if unavailable.</returns>
 		private static uint GetSamplesPerChunk( StscEntry[] entries, uint chunkNumber )
 		{
 			if( entries == null || entries.Length == 0 )
@@ -316,6 +430,14 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			return current.SamplesPerChunk;
 		}
 
+		/// <summary>
+		/// Builds a 7-byte ADTS header for one AAC frame.
+		/// </summary>
+		/// <param name="header">Target buffer (minimum 7 bytes).</param>
+		/// <param name="sampleRate">AAC sample rate in Hz.</param>
+		/// <param name="channelCount">AAC channel count.</param>
+		/// <param name="sampleSize">AAC payload size in bytes.</param>
+		/// <returns><see langword="true"/> if header generation succeeds; otherwise <see langword="false"/>.</returns>
 		private static bool TryBuildAdtsHeader( byte[] header, int sampleRate, int channelCount, int sampleSize )
 		{
 			if( header == null || header.Length < 7 )
@@ -351,6 +473,11 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			return true;
 		}
 
+		/// <summary>
+		/// Maps AAC sample rates to ADTS frequency index values.
+		/// </summary>
+		/// <param name="sampleRate">Sample rate in Hz.</param>
+		/// <returns>ADTS frequency index, or -1 if unsupported.</returns>
 		private static int GetAacSampleRateIndex( int sampleRate )
 		{
 			return sampleRate switch
@@ -372,7 +499,13 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			};
 		}
 
-		private static bool TryBuildMp4AacTrackInfo( FileStream fs, out Mp4AacTrackInfo trackInfo )
+		/// <summary>
+		/// Finds the first AAC audio track in the MP4 container and extracts required metadata.
+		/// </summary>
+		/// <param name="fs">MP4 source stream.</param>
+		/// <param name="trackInfo">Parsed track metadata on success.</param>
+		/// <returns><see langword="true"/> when an AAC track is successfully parsed.</returns>
+		private static bool TryBuildMp4aAcTrackInfo( FileStream fs, out Mp4aAcTrackInfo trackInfo )
 		{
 			trackInfo = null;
 
@@ -387,7 +520,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				long searchPos = moovPayloadStart;
 				while( FindAtomInRange( fs, searchPos, moovAtomEnd, "trak", out _, out long trakPayloadStart, out long trakAtomEnd ) )
 				{
-					if( TryParseMp4AacTrackInfo( fs, trakPayloadStart, trakAtomEnd, out trackInfo ) )
+					if( TryParseMp4aAcTrackInfo( fs, trakPayloadStart, trakAtomEnd, out trackInfo ) )
 					{
 						return true;
 					}
@@ -403,7 +536,15 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			}
 		}
 
-		private static bool TryParseMp4AacTrackInfo( FileStream fs, long trakPayloadStart, long trakAtomEnd, out Mp4AacTrackInfo trackInfo )
+		/// <summary>
+		/// Parses MP4 atoms under a `trak` node to build AAC playback metadata.
+		/// </summary>
+		/// <param name="fs">MP4 source stream.</param>
+		/// <param name="trakPayloadStart">Start position of `trak` payload.</param>
+		/// <param name="trakAtomEnd">End position of `trak` atom.</param>
+		/// <param name="trackInfo">Parsed metadata on success.</param>
+		/// <returns><see langword="true"/> when parsing succeeds.</returns>
+		private static bool TryParseMp4aAcTrackInfo( FileStream fs, long trakPayloadStart, long trakAtomEnd, out Mp4aAcTrackInfo trackInfo )
 		{
 			trackInfo = null;
 
@@ -463,7 +604,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				return false;
 			}
 
-			var track = new Mp4AacTrackInfo
+			var track = new Mp4aAcTrackInfo
 			{
 				ChannelCount = ReadUInt16BigEndian( stsdHeader, 32 ),
 				SampleRate = ( int )( ReadUInt32BigEndian( stsdHeader, 40 ) >> 16 )
@@ -614,7 +755,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			{
 				if( track.ChunkOffsets[ i ] < 0 || track.ChunkOffsets[ i ] >= fs.Length )
 				{
-					Debug.WriteLineIf( EnableVerboseTrace, $"[M4AProcessor] Chunk offset out of file bounds: {track.ChunkOffsets[ i ]}." );
+					Debug.WriteLineIf( EnableVerboseTrace, $"[M4aProcessor] Chunk offset out of file bounds: {track.ChunkOffsets[ i ]}." );
 					return false;
 				}
 			}
@@ -623,6 +764,17 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			return true;
 		}
 
+		/// <summary>
+		/// Scans a bounded byte range for a child atom of the specified type.
+		/// </summary>
+		/// <param name="fs">MP4 source stream.</param>
+		/// <param name="rangeStart">Inclusive search start offset.</param>
+		/// <param name="rangeEnd">Exclusive search end offset.</param>
+		/// <param name="targetType">4-character atom type code.</param>
+		/// <param name="atomStart">Found atom start offset.</param>
+		/// <param name="payloadStart">Found atom payload start offset.</param>
+		/// <param name="atomEnd">Found atom end offset.</param>
+		/// <returns><see langword="true"/> when the atom is found; otherwise <see langword="false"/>.</returns>
 		private static bool FindAtomInRange( FileStream fs, long rangeStart, long rangeEnd, string targetType, out long atomStart, out long payloadStart, out long atomEnd )
 		{
 			atomStart = 0;
@@ -685,11 +837,13 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			return false;
 		}
 
+		/// <summary>Reads an unsigned 16-bit big-endian value from a byte buffer.</summary>
 		private static ushort ReadUInt16BigEndian( byte[] buffer, int offset )
 		{
 			return ( ushort )( ( buffer[ offset ] << 8 ) | buffer[ offset + 1 ] );
 		}
 
+		/// <summary>Reads an unsigned 32-bit big-endian value from a byte buffer.</summary>
 		private static uint ReadUInt32BigEndian( byte[] buffer, int offset )
 		{
 			return ( uint )( ( buffer[ offset ] << 24 )
@@ -698,6 +852,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				| buffer[ offset + 3 ] );
 		}
 
+		/// <summary>Reads an unsigned 64-bit big-endian value from a byte buffer.</summary>
 		private static ulong ReadUInt64BigEndian( byte[] buffer, int offset )
 		{
 			return ( ( ulong )buffer[ offset ] << 56 )
@@ -710,6 +865,10 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				| buffer[ offset + 7 ];
 		}
 
+		/// <summary>
+		/// Emits basic MP4 container diagnostics to debug output when verbose tracing is enabled.
+		/// </summary>
+		/// <param name="fs">Input stream to inspect.</param>
 		private static void LogMp4ContainerInfo( FileStream fs )
 		{
 			long original = fs.Position;
@@ -717,7 +876,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			{
 				if( fs.Length < 16 )
 				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[M4AProcessor] File too small for MP4 diagnostics." );
+					Debug.WriteLineIf( EnableVerboseTrace, "[M4aProcessor] File too small for MP4 diagnostics." );
 					return;
 				}
 
@@ -726,23 +885,23 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				int got = fs.Read( header, 0, header.Length );
 				if( got < 8 )
 				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[M4AProcessor] Unable to read MP4 header." );
+					Debug.WriteLineIf( EnableVerboseTrace, "[M4aProcessor] Unable to read MP4 header." );
 					return;
 				}
 
 				uint atomSize = ReadUInt32BigEndian( header, 0 );
 				string atomType = new string( new[] { ( char )header[ 4 ], ( char )header[ 5 ], ( char )header[ 6 ], ( char )header[ 7 ] } );
-				Debug.WriteLineIf( EnableVerboseTrace, $"[M4AProcessor] First atom='{atomType}', size={atomSize}" );
+				Debug.WriteLineIf( EnableVerboseTrace, $"[M4aProcessor] First atom='{atomType}', size={atomSize}" );
 
 				if( atomType != "ftyp" )
 				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[M4AProcessor] Warning: MP4 container does not start with 'ftyp'." );
+					Debug.WriteLineIf( EnableVerboseTrace, "[M4aProcessor] Warning: MP4 container does not start with 'ftyp'." );
 				}
 				else if( got >= 16 )
 				{
 					string majorBrand = new string( new[] { ( char )header[ 8 ], ( char )header[ 9 ], ( char )header[ 10 ], ( char )header[ 11 ] } );
 					uint minorVersion = ReadUInt32BigEndian( header, 12 );
-					Debug.WriteLineIf( EnableVerboseTrace, $"[M4AProcessor] majorBrand='{majorBrand}', minorVersion=0x{minorVersion:X8}" );
+					Debug.WriteLineIf( EnableVerboseTrace, $"[M4aProcessor] majorBrand='{majorBrand}', minorVersion=0x{minorVersion:X8}" );
 				}
 			}
 			finally

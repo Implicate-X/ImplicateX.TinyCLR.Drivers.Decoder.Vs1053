@@ -5,6 +5,10 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 {
 	public partial class Device
 	{
+		/// <summary>
+		/// Provides functionality to load and apply plugin patches to the VS1053B audio decoder.
+		/// </summary>
+		/// <param name="device"></param>
 		public sealed class PatchEngine( Device device ) : IDisposable
 		{
 			private const bool EnableVerbosePatchTrace = false;
@@ -152,6 +156,12 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				Debug.WriteLineIf( EnableVerbosePatchTrace, "[PatchEngine] Patch restart complete (DREQ ready)." );
 			}
 
+			/// <summary>
+			/// Retrieves the binary plugin data for a given patch type from embedded resources.
+			/// </summary>
+			/// <param name="patchType">The type of patch for which to retrieve binary data.</param>
+			/// <returns>A byte array containing the binary plugin data.</returns>
+			/// <exception cref="NotSupportedException">Thrown when the specified patch type is not embedded as a resource.</exception>
 			private byte[] GetPluginBytesByType( PatchType patchType )
 			{
 				return patchType switch
@@ -166,9 +176,13 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				};
 			}
 
+
 			/// <summary>
-			/// Converts binary resource data (little-endian ushort[]) to a ushort array.
+			/// Converts a byte array of binary plugin data into an array of ushorts, interpreting the bytes as little-endian pairs.
 			/// </summary>
+			/// <param name="binaryData">The byte array containing binary plugin data.</param>
+			/// <returns>An array of ushorts representing the binary plugin data.</returns>
+			/// <exception cref="InvalidOperationException">Thrown when the binary data length is not even.</exception>
 			private static ushort[] ConvertBinaryToUshortArray( byte[] binaryData )
 			{
 				if( binaryData == null || binaryData.Length == 0 )
@@ -192,6 +206,9 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				return result;
 			}
 
+			/// <summary>
+			/// Disposes of the PatchEngine and releases any resources if necessary.
+			/// </summary>
 			public void Dispose()
 			{
 				// Cleanup resources if needed

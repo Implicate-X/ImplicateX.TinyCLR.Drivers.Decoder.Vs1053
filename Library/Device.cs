@@ -121,9 +121,19 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 		/// </summary>
 		private readonly ushort startupMode;
 
+		/// <summary>
+		/// Patch engine for loading and managing VS1053 plugins.
+		/// </summary>
 		private readonly PatchEngine patchEngine;
 
+		/// <summary>
+		/// MIDI engine for handling MIDI playback through the VS1053 chip.
+		/// </summary>
 		private readonly MidiEngine midiEngine;
+
+		/// <summary>
+		/// UART controller name for MIDI playback.
+		/// </summary>
 		private readonly string uartControllerName;
 		private enum Register : byte
 		{
@@ -193,6 +203,9 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			AppControl3 = 0x0F
 		}
 
+		/// <summary>
+		/// Represents the mode register bits of the VS1053 chip.
+		/// </summary>
 		private static class Mode
 		{
 			/// <summary>
@@ -265,6 +278,9 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 		}
 
+		/// <summary>
+		/// Represents the status register bits of the VS1053 chip.
+		/// </summary>
 		private static class Status
 		{
 			/// <summary>
@@ -502,9 +518,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				".ogg"  => PlayFileCore( filePath, "OGG",   2052 ),
 				".aac"  => PlayFileCore( filePath, "AAC",   2052 ),
 				".m4a"  => PlayFileCore( filePath, "M4A",   2052 ),
-				".dsd"  => PlayFileCore( filePath, "DSD",  12288 ),
-				".dsf"  => PlayFileCore( filePath, "DSF",  12288 ),
-				".dff"  => PlayFileCore( filePath, "DFF",  12288 ),
+				".dsd" or ".dsf" or ".dff" => PlayFileCore( filePath, "DSD",  12288 ),
 				".mid" or ".midi" => PlayMidiSong( filePath ),
 				_ => throw new NotSupportedException( $"Unsupported audio format: {fileInfo.Extension}" )
 			};
@@ -512,12 +526,22 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			Thread.Sleep( 1000 );
 		}
 
+		/// <summary>
+		/// Plays a MIDI file by initializing the MIDI engine and streaming the file to the VS1053 decoder.
+		/// </summary>
+		/// <param name="filePath">Absolute or relative path to the source MIDI file.</param>
+		/// <returns><see langword="true"/> if the MIDI file was played successfully; otherwise, <see langword="false"/>.</returns>
 		private bool PlayMidiSong( string filePath )
 		{
 			this.midiEngine.Initialize( this.uartControllerName, startListener: false );
 			return this.midiEngine.PlayFileAndRestoreDecodeMode( filePath );
 		}
 
+		/// <summary>
+		/// Logs the current playback state of the VS1053 chip, including DREQ pin status and SCI register values, for debugging purposes.
+		/// </summary>
+		/// <param name="label">A label identifying the context or source of the log message.</param>
+		/// <param name="stage">A description of the current stage of playback.</param>
 		private void LogPlaybackState( string label, string stage )
 		{
 			ushort sciMode = SciRead( Register.Mode );
@@ -544,7 +568,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 		/// Thrown when the computed media payload start offset is outside the file bounds.
 		/// </exception>
 		/// <remarks>
-		/// For MP3 input, ID3/tag data is skipped via <see cref="FindMp3DataStart(FileStream)"/>.
+		/// Format-specific preprocessing (for example MP3 tag skip or WAV bounded payload) is handled by dedicated processors.
 		/// After payload transmission, decoder flush bytes are sent to let the codec finish decoding buffered frames.
 		/// Different formats require different numbers of filler bytes (MP3/WAV/OGG/AAC/M4A: 2052, FLAC/DSD: 12288).
 		/// </remarks>
@@ -564,21 +588,31 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 				if( label == "MP3" )
 				{
-					dataStart = FindMp3DataStart( fs );
-					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] MP3 data start: {dataStart}" );
+					IMediaPreprocessor mp3Processor = new Mp3Processor();
+					mediaPayLoad = mp3Processor.Process( fs );
+
+					if( mediaPayLoad != null && mediaPayLoad.Stream != null )
+					{
+						mediaStream = mediaPayLoad.Stream;
+						disposeMediaStream = !ReferenceEquals( mediaStream, fs );
+						fillerBytes = mediaPayLoad.FillerBytes;
+						dataStart = mediaStream.CanSeek ? mediaStream.Position : 0;
+						totalFileBytes = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
+					}
 				}
 				else if( label == "WAV" )
 				{
-					// For WAV, keep the RIFF headers so decoder recognizes the format
-					// The decoder needs the RIFF structure to auto-detect PCM
-					dataStart = 0;  // Include RIFF header for format detection
+					IMediaPreprocessor wavProcessor = new WavProcessor();
+					mediaPayLoad = wavProcessor.Process( fs );
 
-					// But limit the file size to just the audio data (no trailing garbage)
-					long actualAudioStart = FindWavDataStart( fs );  // Get real offset (usually 44)
-					long dataChunkDataSize = FindWavDataChunkSize( fs );
-					totalFileBytes = actualAudioStart + dataChunkDataSize;  // RIFF + fmt + data-header + audio
-
-					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] WAV: streaming from offset 0 (with RIFF headers) up to byte {totalFileBytes}" );
+					if( mediaPayLoad != null && mediaPayLoad.Stream != null )
+					{
+						mediaStream = mediaPayLoad.Stream;
+						disposeMediaStream = !ReferenceEquals( mediaStream, fs );
+						fillerBytes = mediaPayLoad.FillerBytes;
+						dataStart = mediaStream.CanSeek ? mediaStream.Position : 0;
+						totalFileBytes = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
+					}
 				}
 				else if( label == "FLAC" )
 				{
@@ -593,7 +627,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				{
 					this.patchEngine.LoadPlugin( patchType: PatchEngine.PatchType.StandardCodec );
 
-					IMediaPreprocessor m4aProcessor = new M4AProcessor();
+					IMediaPreprocessor m4aProcessor = new M4aProcessor();
 					mediaPayLoad = m4aProcessor.Process( fs );
 
 					if( mediaPayLoad != null && mediaPayLoad.Stream != null )
@@ -609,9 +643,17 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				{
 					this.patchEngine.LoadPlugin( patchType: PatchEngine.PatchType.Dsd );
 
-					dataStart = 0;
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] DSD: starting from beginning (container header included)" );
-					LogDsdContainerInfo( fs );
+					IMediaPreprocessor dsdProcessor = new DsdProcessor();
+					mediaPayLoad = dsdProcessor.Process( fs );
+
+					if( mediaPayLoad != null && mediaPayLoad.Stream != null )
+					{
+						mediaStream = mediaPayLoad.Stream;
+						disposeMediaStream = !ReferenceEquals( mediaStream, fs );
+						fillerBytes = mediaPayLoad.FillerBytes;
+						dataStart = mediaStream.CanSeek ? mediaStream.Position : 0;
+						totalFileBytes = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
+					}
 				}
 
 				long streamLengthForValidation = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
@@ -636,7 +678,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 				int targetSdiClock = ( mediaPayLoad != null && mediaPayLoad.CustomClockFrequency > 0 )
 					? mediaPayLoad.CustomClockFrequency
-					: ( label == "DSD" ? DsdDataSPIFrequency : DataSPIFrequency );
+					: ( label == "FLAC" ? DsdDataSPIFrequency : DataSPIFrequency );
 				this.spiDataDevice.ConnectionSettings.ClockFrequency = targetSdiClock;
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] {label}: SDI clock set to {targetSdiClock} Hz" );
 
@@ -675,7 +717,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				}
 
 				bool applyStartupMode = mediaPayLoad != null ? mediaPayLoad.RequiresStartupMode : ( label != "FLAC" && label != "DSD" );
-				byte startFillByte = mediaPayLoad != null ? mediaPayLoad.StartFillByte : ( label == "DSD" ? DsdEndFillByte : EndFillByte );
+				byte startFillByte = mediaPayLoad != null ? mediaPayLoad.StartFillByte : EndFillByte;
 
 				StartSong( applyStartupMode, startFillByte );
 
@@ -712,17 +754,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 					SdiWriteChunks( toWrite );
 
-					if( !dsdDetectionChecked && totalBytesStreamed >= 131072 )
-					{
-						ushort liveHeaderData1 = SciRead( Register.StreamHeaderData1 );
-						Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] DSD live check: SCI_HDAT1=0x{liveHeaderData1:X4}" );
-						if( !IsDsdDetected( liveHeaderData1 ) )
-						{
-							Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] DSD live check warning: decoder has not reported 'DS'." );
-						}
 
-						dsdDetectionChecked = true;
-					}
 				}
 
 				if( disposeMediaStream )
@@ -751,10 +783,6 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
 				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Final state: HeaderData0={headerData0:X4}, HeaderData1={headerData1:X4}, DecodeTime={decodeTime}" );
 
-				if( label == "DSD" && !IsDsdDetected( headerData1 ) )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] DSD warning: SCI_HDAT1 is 0x{headerData1:X4} (expected 'DS' marker)." );
-				}
 
 				// For WAV, dump all SCI registers to see error status
 				if( label == "WAV" )
@@ -887,11 +915,26 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 			SdiWriteChunks( data, offset, count, ChunkSize, true );
 		}
 
+		/// <summary>
+		/// Sends a segment of audio data to SDI in specified chunk sizes.
+		/// </summary>
+		/// <param name="data">Input audio payload.</param>
+		/// <param name="offset">Start offset within <paramref name="data"/>.</param>
+		/// <param name="count">Number of bytes to send.</param>
+		/// <param name="writeChunkSize">Size of each chunk to write to SDI.</param>
 		private void SdiWriteChunks( byte[] data, int offset, int count, int writeChunkSize )
 		{
 			SdiWriteChunks( data, offset, count, writeChunkSize, false );
 		}
 
+		/// <summary>
+		/// Sends a segment of audio data to SDI in specified chunk sizes, optionally skipping ID3v2 tags.
+		/// </summary>
+		/// <param name="data">Input audio payload.</param>
+		/// <param name="offset">Start offset within <paramref name="data"/>.</param>
+		/// <param name="count">Number of bytes to send.</param>
+		/// <param name="writeChunkSize">Size of each chunk to write to SDI.</param>
+		/// <param name="allowId3Skip">Whether to skip ID3v2 tags if detected at the beginning of the data.</param>
 		private void SdiWriteChunks( byte[] data, int offset, int count, int writeChunkSize, bool allowId3Skip )
 		{
 			if( data == null || count <= 0 || offset < 0 || offset >= data.Length )
@@ -1284,296 +1327,6 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 				{
 					DisableSdi();
 				}
-			}
-		}
-
-		/// <summary>
-		/// Logs container-level diagnostics for DSD inputs.
-		/// </summary>
-		/// <param name="fs">Open file stream positioned anywhere.</param>
-		private static void LogDsdContainerInfo( FileStream fs )
-		{
-			long original = fs.Position;
-			try
-			{
-				if( fs.Length < 64 )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] DSD: file too small for container diagnostics." );
-					return;
-				}
-
-				var header = new byte[ 96 ];
-				fs.Position = 0;
-				int got = fs.Read( header, 0, header.Length );
-				if( got < 64 )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] DSD: unable to read container header." );
-					return;
-				}
-
-				if( header[ 0 ] == ( byte )'D' && header[ 1 ] == ( byte )'S' && header[ 2 ] == ( byte )'D' && header[ 3 ] == ( byte )' ' )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] DSD container detected: DSF" );
-
-					if( header[ 28 ] == ( byte )'f' && header[ 29 ] == ( byte )'m' && header[ 30 ] == ( byte )'t' && header[ 31 ] == ( byte )' ' )
-					{
-						uint channels = ReadUInt32LittleEndian( header, 52 );
-						uint sampleRate = ReadUInt32LittleEndian( header, 56 );
-						uint bitsPerSample = ReadUInt32LittleEndian( header, 60 );
-						Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] DSD DSF fmt: Channels={channels}, SampleRate={sampleRate}, BitsPerSample={bitsPerSample}" );
-
-						if( channels != 2 || sampleRate != 2822400 )
-						{
-							Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] DSD warning: VS1053 DSD patch expects stereo DSD64 (2 channels, 2822400 Hz)." );
-						}
-					}
-				}
-				else if( header[ 0 ] == ( byte )'F' && header[ 1 ] == ( byte )'R' && header[ 2 ] == ( byte )'M' && header[ 3 ] == ( byte )'8' )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] DSD container detected: DFF" );
-				}
-				else
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] DSD warning: container signature is neither DSF nor DFF." );
-				}
-			}
-			finally
-			{
-				fs.Position = original;
-			}
-		}
-
-		private static bool IsDsdDetected( ushort headerData1 )
-		{
-			return headerData1 == 0x4453 || headerData1 == 0x5344 || headerData1 == 0x4444;
-		}
-
-		private static uint ReadUInt32LittleEndian( byte[] buffer, int offset )
-		{
-			return ( uint )( buffer[ offset ]
-				| ( buffer[ offset + 1 ] << 8 )
-				| ( buffer[ offset + 2 ] << 16 )
-				| ( buffer[ offset + 3 ] << 24 ) );
-		}
-
-		/// <summary>
-		/// Scans the beginning of an MP3 stream and returns the best data start offset.
-		/// </summary>
-		/// <param name="fs">Open file stream positioned anywhere.</param>
-		/// <returns>Byte position of first MP3 frame sync or derived fallback offset.</returns>
-		/// <remarks>
-		/// The original stream position is restored before returning.
-		/// </remarks>
-		private static long FindMp3DataStart( FileStream fs )
-		{
-			long original = fs.Position;
-			try
-			{
-				int scanLen = ( int )Math.Min( 64 * 1024, fs.Length );
-
-				if( scanLen < 2 )
-				{
-					return 0;
-				}
-
-				fs.Position = 0;
-
-				var probe = new byte[ scanLen ];
-				int got = fs.Read( probe, 0, probe.Length );
-
-				if( got < 2 )
-				{
-					return 0;
-				}
-
-				// Prefer the earliest MP3 frame sync. Metadata before that is skipped implicitly.
-				for( int i = 0; i <= got - 2; i++ )
-				{
-					if( probe[ i ] == 0xFF && ( probe[ i + 1 ] & 0xE0 ) == 0xE0 )
-					{
-						return i;
-					}
-				}
-
-				// Fallback: ID3 signature (if present in this stream layout)
-				for( int i = 0; i <= got - 10; i++ )
-				{
-					if( probe[ i ] == ( byte )'I' && probe[ i + 1 ] == ( byte )'D' && probe[ i + 2 ] == ( byte )'3' )
-					{
-						int size = ( probe[ i + 6 ] << 21 ) | ( probe[ i + 7 ] << 14 ) | ( probe[ i + 8 ] << 7 ) | probe[ i + 9 ];
-						long pos = i + 10 + size;
-						if( pos < fs.Length )
-						{
-							return pos;
-						}
-					}
-				}
-
-				return 0;
-			}
-			finally
-			{
-				fs.Position = original;
-			}
-		}
-
-		/// <summary>
-		/// Finds the size of the data chunk in a WAV file.
-		/// </summary>
-		/// <param name="fs">Open file stream positioned anywhere.</param>
-		/// <returns>Size of data chunk in bytes, or 0 if not found.</returns>
-		private static long FindWavDataChunkSize( FileStream fs )
-		{
-			long original = fs.Position;
-
-			try
-			{
-				fs.Position = 0;
-				var header = new byte[ 12 ];
-
-				if( fs.Read( header, 0, header.Length ) < 12 )
-					return 0;
-
-				long pos = 12;
-				var chunkHeader = new byte[ 8 ];
-
-				while( pos + 8 <= fs.Length )
-				{
-					fs.Position = pos;
-
-					if( fs.Read( chunkHeader, 0, 8 ) < 8 )
-						break;
-
-					string chunkId = new string( new char[]
-					{
-									(char)chunkHeader[ 0 ],
-									(char)chunkHeader[ 1 ],
-									(char)chunkHeader[ 2 ],
-									(char)chunkHeader[ 3 ]
-					} );
-
-					uint chunkSize = 
-						( uint )( chunkHeader[ 4 ] | 
-							( chunkHeader[ 5 ] << 8 ) | 
-							( chunkHeader[ 6 ] << 16 ) | 
-							( chunkHeader[ 7 ] << 24 ) );
-
-					if( chunkId == "data" )
-						return chunkSize;
-
-					pos += 8 + chunkSize;
-					if( chunkSize % 2 == 1 )
-						pos++;
-				}
-
-				return 0;
-			}
-			finally
-			{
-				fs.Position = original;
-			}
-		}
-
-		/// <summary>
-		/// Scans a RIFF WAV file to find the start of audio data (data chunk).
-		/// </summary>
-		/// <param name="fs">Open file stream positioned anywhere.</param>
-		/// <returns>Byte position of first audio sample in the data chunk, or 0 if not found.</returns>
-		/// <remarks>
-		/// RIFF WAV format: RIFF header (12 bytes) + chunks. Each chunk has ID (4 bytes), size (4 bytes, little-endian), then data.
-		/// This method skips fmt and other non-data chunks to find where the actual audio data begins.
-		/// The original stream position is restored before returning.
-		/// </remarks>
-		private static long FindWavDataStart( FileStream fs )
-		{
-			long original = fs.Position;
-			try
-			{
-				fs.Position = 0;
-				var header = new byte[ 12 ];
-				if( fs.Read( header, 0, header.Length ) < 12 )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[FindWavDataStart] Failed: File too small" );
-					return 0;
-				}
-
-				// Check RIFF signature
-				if( header[ 0 ] != 'R' || header[ 1 ] != 'I' || header[ 2 ] != 'F' || header[ 3 ] != 'F' )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[FindWavDataStart] Failed: RIFF signature not found" );
-					return 0;
-				}
-
-				// Check WAVE signature
-				if( header[ 8 ] != 'W' || header[ 9 ] != 'A' || header[ 10 ] != 'V' || header[ 11 ] != 'E' )
-				{
-					Debug.WriteLineIf( EnableVerboseTrace, "[FindWavDataStart] Failed: WAVE signature not found" );
-					return 0;
-				}
-
-				Debug.WriteLineIf( EnableVerboseTrace, "[FindWavDataStart] RIFF/WAVE headers OK, scanning chunks..." );
-
-				// Now scan chunks: each chunk is [4-byte ID][4-byte size LE][data][padding if size is odd]
-				long pos = 12;
-				var chunkHeader = new byte[ 8 ];
-
-				while( pos + 8 <= fs.Length )
-				{
-					fs.Position = pos;
-					if( fs.Read( chunkHeader, 0, 8 ) < 8 )
-						break;
-
-					string chunkId = new string( new char[]
-					{
-								(char)chunkHeader[ 0 ],
-								(char)chunkHeader[ 1 ],
-								(char)chunkHeader[ 2 ],
-								(char)chunkHeader[ 3 ]
-					} );
-					uint chunkSize = ( uint )( chunkHeader[ 4 ] | ( chunkHeader[ 5 ] << 8 ) | ( chunkHeader[ 6 ] << 16 ) | ( chunkHeader[ 7 ] << 24 ) );
-
-					Debug.WriteLineIf( EnableVerboseTrace, $"[FindWavDataStart] Found chunk '{chunkId}' at offset {pos}, size={chunkSize}" );
-
-					if( chunkId == "fmt " )
-					{
-						// Parse fmt chunk to get audio format info
-						if( chunkSize >= 16 )
-						{
-							fs.Position = pos + 8;
-							var fmtData = new byte[ 16 ];
-							if( fs.Read( fmtData, 0, 16 ) == 16 )
-							{
-								ushort audioFormat = ( ushort )( fmtData[ 0 ] | ( fmtData[ 1 ] << 8 ) );
-								ushort numChannels = ( ushort )( fmtData[ 2 ] | ( fmtData[ 3 ] << 8 ) );
-								uint sampleRate = ( uint )( fmtData[ 4 ] | ( fmtData[ 5 ] << 8 ) | ( fmtData[ 6 ] << 16 ) | ( fmtData[ 7 ] << 24 ) );
-								ushort bitsPerSample = ( ushort )( fmtData[ 14 ] | ( fmtData[ 15 ] << 8 ) );
-								Debug.WriteLineIf( EnableVerboseTrace, $"[FindWavDataStart] WAV Format: AudioFormat={audioFormat}, Channels={numChannels}, SampleRate={sampleRate}Hz, BitsPerSample={bitsPerSample}" );
-
-								if( audioFormat != 1 )
-									Debug.WriteLineIf( EnableVerboseTrace, $"[FindWavDataStart] WARNING: Audio format is {audioFormat} (not PCM=1)!" );
-							}
-						}
-					}
-
-					if( chunkId == "data" )
-					{
-						long dataStart = pos + 8;
-						Debug.WriteLineIf( EnableVerboseTrace, $"[FindWavDataStart] Found data chunk! Audio starts at offset {dataStart}" );
-						return dataStart;
-					}
-
-					// Skip this chunk (8-byte header + data + padding)
-					pos += 8 + chunkSize;
-					if( chunkSize % 2 == 1 )
-						pos++; // Chunks are word-aligned
-				}
-
-				Debug.WriteLineIf( EnableVerboseTrace, "[FindWavDataStart] Warning: No data chunk found!" );
-				return 0;
-			}
-			finally
-			{
-				fs.Position = original;
 			}
 		}
 

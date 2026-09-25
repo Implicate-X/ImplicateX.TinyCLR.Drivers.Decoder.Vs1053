@@ -5,6 +5,9 @@ namespace Vs1053App
 {
 	internal class Program
 	{
+		/// <summary>
+		/// The device instance for the VS1053 audio decoder.
+		/// </summary>
 		private static Device device = null!;
 
 		static void Main()
@@ -24,13 +27,13 @@ namespace Vs1053App
 			device.Initialize();
 
 			//device.PlaySong( @"A:\short.mid" );
-			//device.PlaySong( @"A:\short.mp3" );
+			device.PlaySong( @"A:\short.mp3" );
 			//device.PlaySong( @"A:\sample-3s.wav" );
-			//device.PlaySong( @"A:\sample-1mb.flac" );
+			//device.PlaySong( @"A:\All By Myself.flac" );
 			//device.PlaySong( @"A:\usa-hymn.mid" );
 			//device.PlaySong( @"A:\ogg_15s.ogg" );
 			//device.PlaySong( @"A:\aac_15s.aac" );
-			device.PlaySong( @"A:\m4a_15s.m4a" );
+			//device.PlaySong( @"A:\m4a_15s.m4a" );
 		}
 	}
 }

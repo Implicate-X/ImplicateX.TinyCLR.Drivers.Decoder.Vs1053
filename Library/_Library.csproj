@@ -52,8 +52,7 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Device.cs" />
     <Compile Include="MidiEngine.cs" />
-    <Compile Include="WavProcessor.cs" />
-    <Compile Include="DsdProcessor.cs" />
+    <Compile Include="WavProcessor.cs" />`r`n    <Compile Include="DsdProcessor.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
