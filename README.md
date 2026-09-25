@@ -1,6 +1,6 @@
 ﻿# 🎧 ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
-## TinyCLR driver for the VS1053B audio decoder with strict SCI/SDI separation, manual chip‑select handling, deterministic DREQ‑based streaming — and a modern media preprocessor pipeline for clean, extensible format handling.
+### TinyCLR driver for the VS1053B audio decoder with strict SCI/SDI separation, manual chip‑select handling, deterministic DREQ‑based streaming — and a modern media preprocessor pipeline for clean, extensible format handling.
 ---
 
 ## ⚙️ Features
@@ -19,7 +19,7 @@
   - Clean separation of container parsing, patching, and stream normalization
 
 - 🧩 Media Preprocessor Architecture (New)
- Modern audio formats differ drastically in structure:
+- Modern audio formats differ drastically in structure:
   - MP3 → linear frames
   - WAV → RIFF container
   - FLAC → patch‑based decoding
