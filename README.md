@@ -12,7 +12,7 @@ TinyCLR driver for the **VS1053B** audio decoder with strict SCI/SDI separation,
 - 🎚️ Manual chip-select via GPIO (no automatic SPI CS)
 - 📡 Stable DREQ synchronization before SDI writes
 - 🔁 Hardware reset + startup register configuration
-- 🎵 MP3, WAV, FLAC, OGG, AAC, and M4A playback
+- 🎵 MP3, WAV, FLAC, OGG, AAC, MID, and M4A playback
 - 🔊 Sine test support for hardware validation
 - 🎹 Optional real-time MIDI initialization and UART MIDI transport
 
@@ -68,6 +68,9 @@ namespace Vs1053App
 {
 	internal class Program
 	{
+		/// <summary>
+		/// The device instance for the VS1053 audio decoder.
+		/// </summary>
 		private static Device device = null!;
 
 		static void Main()
@@ -75,6 +78,7 @@ namespace Vs1053App
 			_ = new Storage();
 
 			device = new Device(
+				uartControllerName: FEZDuino.UartPort.Uart1,
 				spiControllerName: FEZDuino.SpiBus.Spi6,
 				cmdCsPinID: FEZDuino.GpioPin.PC4,
 				datCsPinID: FEZDuino.GpioPin.PC5,
@@ -85,9 +89,10 @@ namespace Vs1053App
 
 			device.Initialize();
 
-			device.PlaySong( @"A:\sample-100kb.mp3" );
-			device.PlaySong( @"A:\sample-3s.wav" );
-			device.PlaySong( @"A:\sample-1mb.flac" );
+			device.PlaySong( @"A:\Usa-Hymn.mid" );
+			device.PlaySong( @"A:\Thank You for the Music.mp3" );
+			device.PlaySong( @"A:\All by Myself.flac" );
+			device.PlaySong( @"A:\sample-12s.wav" );
 			device.PlaySong( @"A:\ogg_15s.ogg" );
 			device.PlaySong( @"A:\aac_15s.aac" );
 			device.PlaySong( @"A:\m4a_15s.m4a" );

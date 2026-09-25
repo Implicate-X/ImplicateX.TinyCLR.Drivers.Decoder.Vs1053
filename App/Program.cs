@@ -26,14 +26,13 @@ namespace Vs1053App
 
 			device.Initialize();
 
-			//device.PlaySong( @"A:\short.mid" );
-			device.PlaySong( @"A:\short.mp3" );
-			//device.PlaySong( @"A:\sample-3s.wav" );
-			//device.PlaySong( @"A:\All By Myself.flac" );
-			//device.PlaySong( @"A:\usa-hymn.mid" );
-			//device.PlaySong( @"A:\ogg_15s.ogg" );
-			//device.PlaySong( @"A:\aac_15s.aac" );
-			//device.PlaySong( @"A:\m4a_15s.m4a" );
+			device.PlaySong( @"A:\Usa-Hymn.mid" );
+			device.PlaySong( @"A:\Thank You for the Music.mp3" );
+			device.PlaySong( @"A:\All by Myself.flac" );
+			device.PlaySong( @"A:\sample-12s.wav" );
+			device.PlaySong( @"A:\ogg_15s.ogg" );
+			device.PlaySong( @"A:\aac_15s.aac" );
+			device.PlaySong( @"A:\m4a_15s.m4a" );
 		}
 	}
 }
