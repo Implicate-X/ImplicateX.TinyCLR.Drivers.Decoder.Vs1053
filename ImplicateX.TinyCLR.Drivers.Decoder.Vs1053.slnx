@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="ImplicateX.TinyCLR.Drivers.Decoder.Vs1053.nuspec" />
+    <File Path="README.md" />
+  </Folder>
+  <Project Path="App/App.csproj" Id="cfdf71f1-56e5-400b-a11e-89abf0283429">
+    <Deploy />
+  </Project>
+  <Project Path="Library/Library.csproj" Id="6898551b-ee98-4f02-b3e7-19407bc4e5db" />
+</Solution>
