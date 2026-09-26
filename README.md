@@ -1,6 +1,6 @@
 ﻿# 🎧 ImplicateX.TinyCLR.Drivers.Decoder.Vs1053
 
-### TinyCLR driver for the VS1053B audio decoder with strict SCI/SDI separation, manual chip‑select handling, deterministic DREQ‑based streaming — and a modern media preprocessor pipeline for clean, extensible format handling.
+### TinyCLR C# .NET driver for the VS1053B audio decoder with strict SCI/SDI separation, manual chip‑select handling, deterministic DREQ‑based streaming — and a modern media preprocessor pipeline for clean, extensible format handling.
 ---
 
 ## ⚙️ Features
