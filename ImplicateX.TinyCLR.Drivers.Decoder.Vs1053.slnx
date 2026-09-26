@@ -8,30 +8,12 @@
     <File Path="patches/Convert-PlgToBinary.ps1" />
     <File Path="patches/Convert-PlgToCSharp.ps1" />
     <File Path="patches/vs1053b-patches-dsd.bin" />
-    <File Path="patches/vs1053b-patches-dsd.c" />
-    <File Path="patches/vs1053b-patches-dsd.cmd" />
-    <File Path="patches/vs1053b-patches-dsd.plg" />
     <File Path="patches/vs1053b-patches-flac-latm.bin" />
-    <File Path="patches/vs1053b-patches-flac-latm.c" />
-    <File Path="patches/vs1053b-patches-flac-latm.cmd" />
-    <File Path="patches/vs1053b-patches-flac-latm.plg" />
     <File Path="patches/vs1053b-patches-flac.bin" />
-    <File Path="patches/vs1053b-patches-flac.c" />
-    <File Path="patches/vs1053b-patches-flac.cmd" />
-    <File Path="patches/vs1053b-patches-flac.plg" />
     <File Path="patches/vs1053b-patches-latm.bin" />
-    <File Path="patches/vs1053b-patches-latm.c" />
-    <File Path="patches/vs1053b-patches-latm.cmd" />
-    <File Path="patches/vs1053b-patches-latm.plg" />
     <File Path="patches/vs1053b-patches-pitch.bin" />
-    <File Path="patches/vs1053b-patches-pitch.c" />
-    <File Path="patches/vs1053b-patches-pitch.cmd" />
-    <File Path="patches/vs1053b-patches-pitch.plg" />
     <File Path="patches/vs1053b-patches.bin" />
-    <File Path="patches/vs1053b-patches.c" />
-    <File Path="patches/vs1053b-patches.cmd" />
     <File Path="patches/vs1053b-patches.pdf" />
-    <File Path="patches/vs1053b-patches.plg" />
     <File Path="patches/vs1053b-patches.txt" />
   </Folder>
   <Project Path="App/App.csproj" Id="cfdf71f1-56e5-400b-a11e-89abf0283429">
