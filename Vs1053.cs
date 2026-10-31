@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
@@ -334,6 +335,87 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		}
 
 		/// <summary>
+		/// Identifies each individual VS1053 health check test.
+		/// </summary>
+		public enum HealthTest
+		{
+			DreqReady = 1,
+			SciModeRead = 2,
+			SciVolumeReadWrite = 3,
+			SciVolumeRestore = 4,
+			DecodeTimeRead = 5,
+			SineStartStop = 6
+		}
+
+		/// <summary>
+		/// Return code for each VS1053 health check test.
+		/// </summary>
+		public enum HealthCode
+		{
+			Success = 0,
+			Skipped = 1,
+			DreqNotReady = 1001,
+			SciModeReadFailed = 1101,
+			SciVolumeReadWriteFailed = 1201,
+			SciVolumeReadbackMismatch = 1202,
+			SciVolumeRestoreFailed = 1203,
+			DecodeTimeReadFailed = 1301,
+			SineTestFailed = 1401,
+			UnexpectedError = 9000
+		}
+
+		/// <summary>
+		/// Represents the outcome of one health check test.
+		/// </summary>
+		public sealed class HealthTestResult
+		{
+			public HealthTestResult( HealthTest test, HealthCode code, string message )
+			{
+				this.Test = test;
+				this.Code = code;
+				this.Message = message;
+			}
+
+			public HealthTest Test { get; }
+			public HealthCode Code { get; }
+			public string Message { get; }
+			public bool Passed => this.Code == HealthCode.Success || this.Code == HealthCode.Skipped;
+		}
+
+		/// <summary>
+		/// Aggregated VS1053 health check report with per-test return codes.
+		/// </summary>
+		public sealed class HealthCheckReport
+		{
+			public HealthCheckReport( HealthTestResult[] results )
+			{
+				this.Results = results;
+
+				HealthCode firstFailure = HealthCode.Success;
+				bool healthy = true;
+
+				for( int i = 0; i < results.Length; i++ )
+				{
+					if( results[ i ].Code == HealthCode.Success || results[ i ].Code == HealthCode.Skipped )
+					{
+						continue;
+					}
+
+					healthy = false;
+					firstFailure = results[ i ].Code;
+					break;
+				}
+
+				this.IsHealthy = healthy;
+				this.OverallCode = firstFailure;
+			}
+
+			public HealthTestResult[] Results { get; }
+			public bool IsHealthy { get; }
+			public HealthCode OverallCode { get; }
+		}
+
+		/// <summary>
 		/// Creates a VS1053 driver instance and prepares GPIO/SPI resources for SCI (command) and SDI (data) communication.
 		/// </summary>
 		/// <param name="spiControllerName">SPI controller name used to open the VS1053 bus.</param>
@@ -555,6 +637,141 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 			}
 
 			Debug.WriteLine( output );
+		}
+
+		/// <summary>
+		/// Executes a deterministic VS1053 health check sequence and returns a per-test result code.
+		/// </summary>
+		/// <param name="includeSineTest"><see langword="true"/> to include the audible sine startup test.</param>
+		/// <param name="sineDurationMs">Sine test duration in milliseconds when enabled.</param>
+		/// <returns>A report with one return code per test and an overall health state.</returns>
+		public HealthCheckReport CheckHealth( bool includeSineTest = true, int sineDurationMs = 300 )
+		{
+			var results = new List<HealthTestResult>();
+			ushort originalVolume = 0;
+			bool hasOriginalVolume = false;
+
+			try
+			{
+				try
+				{
+					WaitDreqStableHigh( 3, 1000 );
+					results.Add( new HealthTestResult( HealthTest.DreqReady, HealthCode.Success, "DREQ reached stable HIGH." ) );
+				}
+				catch( Exception ex )
+				{
+					results.Add( new HealthTestResult( HealthTest.DreqReady, HealthCode.DreqNotReady, ex.Message ) );
+				}
+
+				try
+				{
+					ushort mode = SciRead( Register.Mode );
+					results.Add( new HealthTestResult( HealthTest.SciModeRead, HealthCode.Success, $"SCI_MODE=0x{mode:X4}" ) );
+				}
+				catch( Exception ex )
+				{
+					results.Add( new HealthTestResult( HealthTest.SciModeRead, HealthCode.SciModeReadFailed, ex.Message ) );
+				}
+
+				try
+				{
+					originalVolume = SciRead( Register.Volume );
+					hasOriginalVolume = true;
+
+					ushort testVolume = ( ushort )( originalVolume ^ 0x0F0F );
+					if( testVolume == originalVolume )
+					{
+						testVolume = ( ushort )( originalVolume ^ 0x00FF );
+					}
+
+					SciWrite( Register.Volume, testVolume );
+
+					ushort readBack = 0;
+					bool matched = false;
+
+					for( int attempt = 0; attempt < 3; attempt++ )
+					{
+						if( attempt > 0 )
+						{
+							Thread.Sleep( 2 );
+						}
+
+						readBack = SciRead( Register.Volume );
+						if( readBack == testVolume )
+						{
+							matched = true;
+							break;
+						}
+					}
+
+					if( matched )
+					{
+						results.Add( new HealthTestResult( HealthTest.SciVolumeReadWrite, HealthCode.Success, $"SCI_VOL readback matched 0x{readBack:X4}." ) );
+					}
+					else
+					{
+						results.Add( new HealthTestResult( HealthTest.SciVolumeReadWrite, HealthCode.SciVolumeReadbackMismatch, $"SCI_VOL readback mismatch after retries. Wrote 0x{testVolume:X4}, last read 0x{readBack:X4}." ) );
+					}
+				}
+				catch( Exception ex )
+				{
+					results.Add( new HealthTestResult( HealthTest.SciVolumeReadWrite, HealthCode.SciVolumeReadWriteFailed, ex.Message ) );
+				}
+				finally
+				{
+					if( hasOriginalVolume )
+					{
+						try
+						{
+							SciWriteWithRecovery( Register.Volume, originalVolume );
+							results.Add( new HealthTestResult( HealthTest.SciVolumeRestore, HealthCode.Success, $"SCI_VOL restored to 0x{originalVolume:X4}." ) );
+						}
+						catch( Exception ex )
+						{
+							results.Add( new HealthTestResult( HealthTest.SciVolumeRestore, HealthCode.SciVolumeRestoreFailed, ex.Message ) );
+						}
+					}
+					else
+					{
+						results.Add( new HealthTestResult( HealthTest.SciVolumeRestore, HealthCode.Skipped, "SCI_VOL restore skipped (original value unavailable)." ) );
+					}
+				}
+
+				try
+				{
+					ushort decodeTime = SciRead( Register.DecodeTime );
+					results.Add( new HealthTestResult( HealthTest.DecodeTimeRead, HealthCode.Success, $"SCI_DECODE_TIME=0x{decodeTime:X4}" ) );
+				}
+				catch( Exception ex )
+				{
+					results.Add( new HealthTestResult( HealthTest.DecodeTimeRead, HealthCode.DecodeTimeReadFailed, ex.Message ) );
+				}
+
+				if( includeSineTest )
+				{
+					try
+					{
+						StartSineTest();
+						Thread.Sleep( Math.Max( 50, sineDurationMs ) );
+						StopSineTest();
+						results.Add( new HealthTestResult( HealthTest.SineStartStop, HealthCode.Success, "Sine test start/stop sequence completed." ) );
+					}
+					catch( Exception ex )
+					{
+						results.Add( new HealthTestResult( HealthTest.SineStartStop, HealthCode.SineTestFailed, ex.Message ) );
+					}
+				}
+				else
+				{
+					results.Add( new HealthTestResult( HealthTest.SineStartStop, HealthCode.Skipped, "Sine test skipped by caller." ) );
+				}
+			}
+			catch( Exception ex )
+			{
+				results.Add( new HealthTestResult( HealthTest.SineStartStop, HealthCode.UnexpectedError, ex.Message ) );
+			}
+
+			return new HealthCheckReport( results.ToArray() );
 		}
 
 		/// <summary>
@@ -1241,24 +1458,33 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 				throw new ArgumentNullException( nameof( frame ) );
 			}
 
-			AwaitDataRequest( 500 );
+			int originalClock = this.spiDataDevice.ConnectionSettings.ClockFrequency;
+			this.spiDataDevice.ConnectionSettings.ClockFrequency = StartupSPIFrequency;
 
-			lock( this.spiSync )
+			try
 			{
-				EnableSdi();
-
-				try
+				lock( this.spiSync )
 				{
-					for( int index = 0; index < frame.Length; index++ )
+					EnableSdi();
+
+					try
 					{
-						this.singleByteBuffer[ 0 ] = frame[ index ];
-						this.spiDataDevice.Write( this.singleByteBuffer );
+						for( int index = 0; index < frame.Length; index++ )
+						{
+							AwaitDataRequest( 500 );
+							this.singleByteBuffer[ 0 ] = frame[ index ];
+							this.spiDataDevice.Write( this.singleByteBuffer );
+						}
+					}
+					finally
+					{
+						DisableSdi();
 					}
 				}
-				finally
-				{
-					DisableSdi();
-				}
+			}
+			finally
+			{
+				this.spiDataDevice.ConnectionSettings.ClockFrequency = originalClock;
 			}
 		}
 
@@ -1315,6 +1541,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		/// </summary>
 		private void EnableSci()
 		{
+			this.datCsPin.Write( GpioPinValue.High );
 			this.cmdCsPin.Write( GpioPinValue.Low );
 		}
 
@@ -1331,6 +1558,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		/// </summary>
 		private void EnableSdi()
 		{
+			this.cmdCsPin.Write( GpioPinValue.High );
 			this.datCsPin.Write( GpioPinValue.Low );
 		}
 
