@@ -27,10 +27,26 @@
   - M4A → MP4 container with AAC track extraction
   - AAC → ADTS/ADIF raw stream
   - OGG → Ogg container with Vorbis/Opus track extraction
-
-### Device class obtains a MediaPayLoad from the appropriate preprocessor based on file extension
 ---
+## ⚙️ Patching and Preprocessing
+Previous patch resources are split into six dedicated patch projects, each consumed as a patch array.
+  This design is intentional because a single assembly must stay below 64 kB.
 
+- [ ] Device class obtains a MediaPayLoad from the appropriate preprocessor based on file extension:
+ ```csharp
+	ushort[] pluginData = patchType switch
+	{
+		PatchType.StandardCodec => Standard.Data,
+		PatchType.Dsd => Dsd.Data,
+		PatchType.Flac => Flac.Data,
+		PatchType.Latm => Latm.Data,
+		PatchType.FlacLatm => FlacLatm.Data,
+		PatchType.Pitch => Pitch.Data,
+		_ => throw new NotSupportedException( $"Patch type '{patchType}' is currently not embedded as resource." ),
+	};
+```
+
+---
 ## 📦 Requirements
 
 - .NET Framework **4.8**
@@ -113,6 +129,8 @@ namespace Vs1053App
 	}
 }
 ```
+
+---
 ## 🎹 MIDI (Optional)
 
 Initialize UART MIDI (31,250 baud):
