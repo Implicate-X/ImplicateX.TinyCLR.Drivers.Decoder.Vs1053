@@ -1,0 +1,36 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="license.txt" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/Solution Items/Patches/">
+    <Project Path="patches/Dsd/ImplicateX.TinyCLR.Drivers.Decoder.Patch.Dsd.csproj" Id="c880ad8d-843d-4cbf-8a77-3dfa9ee7fda5" />
+    <Project Path="patches/Flac/ImplicateX.TinyCLR.Drivers.Decoder.Patch.Flac.csproj" Id="5db4d954-8077-4820-9046-0a3fda79f11a" />
+    <Project Path="patches/FlacLatm/ImplicateX.TinyCLR.Drivers.Decoder.Patch.FlacLatm.csproj" Id="49fe3ece-859c-42a0-85f9-f72c05d3606b" />
+    <Project Path="patches/Latm/ImplicateX.TinyCLR.Drivers.Decoder.Patch.Latm.csproj" Id="13996c17-f7b7-4e69-bd5e-f39176dd5adb" />
+    <Project Path="patches/Pitch/ImplicateX.TinyCLR.Drivers.Decoder.Patch.Pitch.csproj" Id="e243758d-ce5f-49cd-885e-c555e530f48f" />
+    <Project Path="patches/Standard/ImplicateX.TinyCLR.Drivers.Decoder.Patch.Standard.csproj" Id="f25d7eab-9e47-47f3-9ac7-99c66fde5bc5" />
+  </Folder>
+  <Folder Name="/Solution Items/Patches/Raw/">
+    <File Path="patches/Raw/Convert-PlgToBinary.ps1" />
+    <File Path="patches/Raw/Convert-PlgToCSharp.ps1" />
+    <File Path="patches/Raw/vs1053b-patches-dsd.bin" />
+    <File Path="patches/Raw/vs1053b-patches-dsd.plg" />
+    <File Path="patches/Raw/vs1053b-patches-flac-latm.bin" />
+    <File Path="patches/Raw/vs1053b-patches-flac-latm.plg" />
+    <File Path="patches/Raw/vs1053b-patches-flac.bin" />
+    <File Path="patches/Raw/vs1053b-patches-flac.plg" />
+    <File Path="patches/Raw/vs1053b-patches-latm.bin" />
+    <File Path="patches/Raw/vs1053b-patches-latm.plg" />
+    <File Path="patches/Raw/vs1053b-patches-pitch.bin" />
+    <File Path="patches/Raw/vs1053b-patches-pitch.plg" />
+    <File Path="patches/Raw/vs1053b-patches-standard.bin" />
+    <File Path="patches/Raw/vs1053b-patches-standard.plg" />
+    <File Path="patches/Raw/vs1053b-patches.pdf" />
+    <File Path="patches/Raw/vs1053b-patches.txt" />
+  </Folder>
+  <Project Path="App/App.csproj" Id="cfdf71f1-56e5-400b-a11e-89abf0283429">
+    <Deploy />
+  </Project>
+  <Project Path="ImplicateX.TinyCLR.Drivers.Decoder.Vs1053.csproj" Id="7a660e98-fa49-4a18-b9c0-9732765d84ce" />
+</Solution>

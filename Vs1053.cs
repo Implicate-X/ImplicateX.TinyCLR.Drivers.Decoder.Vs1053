@@ -1,0 +1,1345 @@
+﻿using System;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+using GHIElectronics.TinyCLR.Devices.Gpio;
+using GHIElectronics.TinyCLR.Devices.Spi;
+
+namespace ImplicateX.TinyCLR.Drivers.Decoder
+{
+	/// <summary>
+	/// Provides low-level control of a VS1053 audio codec over SPI using manually controlled chip-select lines.
+	/// </summary>
+	/// <remarks>
+	/// This driver separates SCI (command) and SDI (data) traffic across two SPI device instances and
+	/// gates transfers with the DREQ pin to follow VS1053 timing requirements.
+	/// </remarks>
+	public partial class Vs1053
+	{
+		private const bool EnableVerboseTrace = true;
+		/// <summary>
+		/// SCI/command channel index for the SPI device array.
+		/// </summary>
+		private const int CommandChannel = 0;
+		/// <summary>
+		/// SDI/data channel index for the SPI device array.
+		/// </summary>
+		private const int DataChannel = 1;
+		/// <summary>
+		/// Recommended clock frequency for the VS1053 chip in SCI_CLOCKF register.
+		/// </summary>
+		private const ushort RecommendedClockf = 0x6000;
+		/// <summary>
+		/// Internal decode clock used for DSD playback.
+		/// Keep aligned with actual XTALI reference to avoid playback rate drift.
+		/// </summary>
+		private const ushort DsdClockf = RecommendedClockf;
+		/// <summary>
+		/// Startup sine frequency for the VS1053 chip.
+		/// </summary>
+		private const int StartupSineFrequency = 0x44;
+		/// <summary>
+		/// Startup SPI frequency for the VS1053 chip.
+		/// </summary>
+		private const int StartupSPIFrequency = 250_000;
+		/// <summary>
+		/// Default SDI/data SPI frequency for the VS1053 chip.
+		/// </summary>
+		private const int DataSPIFrequency = 5_000_000;
+		/// <summary>
+		/// Higher SDI/data SPI frequency used for DSD streams that require more sustained throughput.
+		/// </summary>
+		private const int DsdDataSPIFrequency = 12_000_000;
+		/// <summary>
+		/// End fill byte for baseline VS1053 paths.
+		/// </summary>
+		private const byte EndFillByte = 0x00;
+		/// <summary>
+		/// End fill byte required by VS1053 DSD patch path.
+		/// </summary>
+		private const byte DsdEndFillByte = 0x55;
+		/// <summary>
+		/// Chunk size for baseline data transfers to the VS1053 chip.
+		/// </summary>
+		private const int ChunkSize = 32;
+		/// <summary>
+		/// DREQ poll interval in milliseconds. Lower values increase throughput but may cause timing issues.
+		/// For WAV playback (high bitrate), use 0 for busy-wait; for stability, use 1.
+		/// </summary>
+		private static int DreqPollIntervalMs = 0;
+		/// <summary>
+		/// GPIO pin for the SCI/command channel chip-select.
+		/// </summary>
+		private readonly GpioPin cmdCsPin = null!;
+		/// <summary>
+		/// GPIO pin for the SDI/data channel chip-select.
+		/// </summary>
+		private readonly GpioPin datCsPin = null!;
+		/// <summary>
+		/// GPIO pin for the DREQ/data request signal.
+		/// </summary>
+		private readonly GpioPin dreqPin = null!;
+		/// <summary>
+		/// GPIO pin for the RESET signal.
+		/// </summary>
+		private readonly GpioPin resetPin = null!;
+		/// <summary>
+		/// GPIO pin for the optional GPIO0 signal, which can be used for additional control or status monitoring.
+		/// </summary>
+		private readonly GpioPin gpio0Pin = null!	;
+		/// <summary>
+		/// GPIO pin for the optional GPIO1 signal, which can be used for additional control or status monitoring.
+		/// </summary>
+		private readonly GpioPin gpio1Pin = null!;
+		/// <summary>
+		/// SPI device for the SCI/command channel.
+		/// </summary>
+		private readonly SpiDevice spiCmdDevice;
+		/// <summary>
+		/// SPI device for the SDI/data channel.
+		/// </summary>
+		private readonly SpiDevice spiDataDevice;
+
+		/// <summary>
+		/// Synchronization object for SPI operations.
+		/// </summary>
+		private readonly object spiSync = new();
+		/// <summary>
+		/// Buffer for command transactions to the VS1053 chip.
+		/// </summary>
+		private readonly byte[] cmdBuffer = new byte[ 4 ];
+		/// <summary>
+		/// Buffer for data blocks to the VS1053 chip.
+		/// </summary>
+		private readonly byte[] dataBlock = new byte[ 32 ];
+		/// <summary>
+		/// Buffer for single-byte transactions to the VS1053 chip.
+		/// </summary>
+		private readonly byte[] singleByteBuffer = new byte[ 1 ];
+		/// <summary>
+		/// Startup mode for the VS1053 chip.
+		/// </summary>
+		private readonly ushort startupMode;
+
+		/// <summary>
+		/// Patch engine for loading and managing VS1053 plugins.
+		/// </summary>
+		private readonly PatchEngine patchEngine;
+
+		/// <summary>
+		/// MIDI engine for handling MIDI playback through the VS1053 chip.
+		/// </summary>
+		private readonly MidiEngine midiEngine;
+
+		/// <summary>
+		/// UART controller name for MIDI playback.
+		/// </summary>
+		private readonly string uartControllerName;
+		private enum Register : byte
+		{
+			/// <summary>
+			/// SCI_MODE register address.
+			/// </summary>
+			Mode = 0x00,
+			/// <summary>
+			/// SCI_STATUS register address.
+			/// </summary>
+			Status = 0x01,
+			/// <summary>
+			/// SCI_BASS register address.
+			/// </summary>
+			BassTreble = 0x02,
+			/// <summary>
+			/// SCI_CLOCKF register address.
+			/// </summary>
+			ClockFrequency = 0x03,
+			/// <summary>
+			/// SCI_DECODE_TIME register address.
+			/// </summary>
+			DecodeTime = 0x04,
+			/// <summary>
+			/// SCI_AUDATA register address.
+			/// </summary>
+			AudioData = 0x05,
+			/// <summary>
+			/// SCI_WRAM register address for writing and reading to/from the VS1053's internal RAM.
+			/// </summary>
+			WRAMWriteRead = 0x06,
+			/// <summary>
+			/// SCI_WRAMADDR register address for setting the base address of the VS1053's internal RAM.
+			/// </summary>
+			WRAMBaseAddress = 0x07,
+			/// <summary>
+			/// SCI_STREAM_HEADER_DATA_0 register address.
+			/// </summary>
+			StreamHeaderData0 = 0x08,
+			/// <summary>
+			/// SCI_STREAM_HEADER_DATA_1 register address.
+			/// </summary>
+			StreamHeaderData1 = 0x09,
+			/// <summary>
+			/// SCI_APP_START_ADDRESS register address.
+			/// </summary>
+			AppStartAddress = 0x0A,
+			/// <summary>
+			/// SCI_VOLUME register address.
+			/// </summary>
+			Volume = 0x0B,
+			/// <summary>
+			/// SCI_APP_CONTROL_0 register address.
+			/// </summary>
+			AppControl0 = 0x0C,
+			/// <summary>
+			/// SCI_APP_CONTROL_1 register address.
+			/// </summary>
+			AppControl1 = 0x0D,
+			/// <summary>
+			/// SCI_APP_CONTROL_2 register address.
+			/// </summary>
+			AppControl2 = 0x0E,
+			/// <summary>
+			/// SCI_APP_CONTROL_3 register address.
+			/// </summary>
+			AppControl3 = 0x0F
+		}
+
+		/// <summary>
+		/// Represents the mode register bits of the VS1053 chip.
+		/// </summary>
+		private static class Mode
+		{
+			/// <summary>
+			/// Enables differential output mode for the analog output stage.
+			/// </summary>
+			public const ushort Differential = 0b000_0000_0000_0001;
+			/// <summary>
+			/// Allows MPEG Layers I and II decoding.
+			/// </summary>
+			public const ushort AllowMpeLayersIAndII = 0b0000_0000_0000_0010;
+			/// <summary>
+			/// Enables software reset of the VS1053 chip. This bit is self-clearing after the reset is complete.
+			/// </summary>
+			public const ushort SoftReset = 0b0000_0000_0000_0100;
+			/// <summary>
+			/// Cancels decoding of the current file.
+			/// </summary>
+			public const ushort CancelDecodingCurrentFile = 0b0000_0000_0000_1000;
+			/// <summary>
+			/// Sets the ear speaker to a low setting.
+			/// </summary>
+			public const ushort EarSpeakerLowSetting = 0b0000_0000_0001_0000;
+			/// <summary>
+			/// Allows SDI tests.
+			/// </summary>
+			public const ushort AllowSdiTests = 0b0000_0000_0010_0000;
+			/// <summary>
+			/// Enables stream mode.
+			/// </summary>
+			public const ushort StreamMode = 0b0000_0000_0100_0000;
+			/// <summary>
+			/// Sets the ear speaker to a high setting.
+			/// </summary>
+			public const ushort EarSpeakerHighSetting = 0b0000_0000_1000_0000;
+			/// <summary>
+			/// Sets the DCLK active edge.
+			/// </summary>
+			public const ushort DCLKActiveEdge = 0b0000_0001_0000_0000;
+			/// <summary>
+			/// Sets the bit order to MSb first.
+			/// </summary>
+			public const ushort BitOrderMSbFirst = 0b0000_0010_0000_0000;
+			/// <summary>
+			/// Shares the chip select.
+			/// </summary>
+			public const ushort ShareChipSelect = 0b0000_0100_0000_0000;
+			/// <summary>
+			/// Indicates a new SDI.
+			/// </summary>
+			public const ushort SdiNew = 0b0000_1000_0000_0000;
+			/// <summary>
+			/// Indicates that PCM recording is active.
+			/// </summary>
+			public const ushort PCMRecordingActive = 0b0001_0000_0000_0000;
+			/// <summary>
+			/// No specific mode is set.
+			/// </summary>
+			public const ushort None = 0b0010_0000_0000_0000;
+			/// <summary>
+			/// Selects Line 1.
+			/// </summary>
+			public const ushort Line1Selector = 0b0100_0000_0000_0000;
+			/// <summary>
+			/// SM_CLK_RANGE activates a clock divider in the XTAL input. <br/>
+			/// When SM_CLK_RANGE is set, the clock is divided by 2 at the input.<br/>
+			/// From the chip’s point of view e.g. 24 MHz becomes 12 MHz.<br/>
+			/// SM_CLK_RANGE should be set as soon as possible after a chip reset.
+			/// </summary>
+			public const ushort InputClockRange = 0b1000_0000_0000_0000;
+
+		}
+
+		/// <summary>
+		/// Represents the status register bits of the VS1053 chip.
+		/// </summary>
+		private static class Status
+		{
+			/// <summary>
+			/// Reference voltage selection
+			/// <list type="table">
+			/// <item>0 = 1.23 V</item>
+			/// <item>1 = 1.65 V</item>
+			/// </list>
+			/// </summary>
+			public const ushort ReferenceVoltageSelection = 0b0000_0000_0000_0001;
+			/// <summary>
+			/// SS_AD_CLOCK can be set to divide the AD modulator frequency by 2 if XTALI/2 is too much.
+			/// <list type="table">
+			/// <item>0 = 6 MHz</item>
+			/// <item>1 = 3 MHz</item>
+			/// </list>
+			/// </summary>
+			public const ushort ClockSelection = 0b0000_0000_0000_0010;
+			/// <summary>
+			/// SS_APDOWN1 controls internal analog	powerdown.
+			/// These bit are meant to be used by the system firmware only.
+			/// </summary>
+			public const ushort AnalogInternalPowerdown = 0b0000_0000_0000_0100;
+			/// <summary>
+			/// SS_APDOWN2 controls analog driver powerdown.
+			/// </summary>
+			public const ushort AnalogDriverPowerdown = 0b0000_0000_0000_1000;
+			/// <summary>
+			/// VersionMask is a 4-bit field that indicates the silicon version of the VS1053 chip.
+			/// </summary>
+			public const ushort VersionMask = 0b0000_0000_1111_0000;
+			/// <summary>
+			/// Overload is set when the analog output stage is overloaded.<br />
+			/// The overload condition can be cleared by a soft reset or by clearing this bit in the SCI_MODE register.
+			/// </summary>
+			public const ushort Overload = 0b0000_0100_0000_0000;
+			/// <summary>
+			/// OverloadDisabled is set when the analog output stage overload is disabled.
+			/// </summary>
+			public const ushort OverloadDisabled = 0b0000_1000_0000_0000;
+			/// <summary>
+			/// SwingMask is a 3-bit field that indicates the swing level of the analog output stage.
+			/// </summary>
+			public const ushort SwingMask = 0b0111_0000_0000_0000;
+			/// <summary>
+			/// SS_DO_NOT_JUMP is set when a WAV, Ogg Vorbis, WMA, MP4, or AAC-ADIF header 
+			/// is being decoded and jumping to another location in the file is not allowed.
+			/// If you use soft reset or cancel, clear this bit yourself or it can be accidentally left set.
+			/// </summary>
+			public const ushort DecodedHeader = 0b1000_0000_0000_0000;
+		}
+
+		/// <summary>
+		/// Creates a VS1053 driver instance and prepares GPIO/SPI resources for SCI (command) and SDI (data) communication.
+		/// </summary>
+		/// <param name="spiControllerName">SPI controller name used to open the VS1053 bus.</param>
+		/// <param name="cmdCsPinID">GPIO pin number used as manual chip-select for the SCI/command channel.</param>
+		/// <param name="datCsPinID">GPIO pin number used as manual chip-select for the SDI/data channel.</param>
+		/// <param name="dreqPinID">GPIO pin number connected to VS1053 DREQ (data request) signal.</param>
+		/// <param name="resetPinID">GPIO pin number connected to VS1053 hardware reset.</param>
+		/// <remarks>
+		/// The driver intentionally uses <see cref="SpiChipSelectType.None"/> and controls chip-select lines manually
+		/// via GPIO to ensure stable VS1053 transactions on both channels.
+		/// Startup SPI frequency is applied to both devices; higher SDI speed is configured later in <see cref="Initialize"/>.
+		/// </remarks>
+		public Vs1053(
+			string uartControllerName,
+			string spiControllerName,
+			int cmdCsPinID,
+			int datCsPinID,
+			int dreqPinID,
+			int resetPinID,
+			int gpio0PinID = -1,
+			int gpio1PinID = -1 )
+		{
+			this.patchEngine = new PatchEngine( this );
+			this.midiEngine = new MidiEngine( this );
+			this.uartControllerName = uartControllerName;
+
+			var gpioController = GpioController.GetDefault();
+			var spiController = SpiController.FromName( spiControllerName );
+
+			this.cmdCsPin = gpioController.OpenPin( cmdCsPinID );
+			this.datCsPin = gpioController.OpenPin( datCsPinID );
+			this.dreqPin = gpioController.OpenPin( dreqPinID );
+			this.resetPin = gpioController.OpenPin( resetPinID );
+
+			if( gpio0PinID != -1 )
+			{
+				this.gpio0Pin = gpioController.OpenPin( gpio0PinID );
+				this.gpio0Pin.SetDriveMode( GpioPinDriveMode.InputPullDown );
+			}
+
+			if( gpio1PinID != -1 )
+			{
+				this.gpio1Pin = gpioController.OpenPin( gpio1PinID );
+				this.gpio1Pin.SetDriveMode( GpioPinDriveMode.InputPullDown );
+			}
+
+			this.cmdCsPin.SetDriveMode( GpioPinDriveMode.Output );
+			this.datCsPin.SetDriveMode( GpioPinDriveMode.Output );
+			this.dreqPin.SetDriveMode( GpioPinDriveMode.Input );
+			this.resetPin.SetDriveMode( GpioPinDriveMode.Output );
+
+			DisableSci();
+			DisableSdi();
+
+			this.resetPin.Write( GpioPinValue.High );
+
+			var spiSettings = new SpiConnectionSettings[]
+			{
+				new()
+				{
+					ChipSelectType = SpiChipSelectType.None,
+					ClockFrequency = StartupSPIFrequency,
+					Mode = SpiMode.Mode0
+				},
+				new()
+				{
+					ChipSelectType = SpiChipSelectType.None,
+					ClockFrequency = StartupSPIFrequency,
+					Mode = SpiMode.Mode0
+				}
+			};
+
+			this.spiCmdDevice = spiController.GetDevice( spiSettings[ CommandChannel ] );
+			this.spiDataDevice = spiController.GetDevice( spiSettings[ DataChannel ] );
+
+			this.startupMode = Mode.SdiNew | Mode.AllowMpeLayersIAndII;
+		}
+
+		/// <summary>
+		/// Resets and configures the codec for normal playback operation.
+		/// </summary>
+		/// <remarks>
+		/// Performs a hardware reset, applies initial SCI register configuration, then increases SDI SPI clock
+		/// from startup speed to streaming speed for audio data transfer.
+		/// </remarks>
+		public void Initialize()
+		{
+			ResetHardware();
+			ConfigureStartupRegisters();
+
+			this.spiDataDevice.ConnectionSettings.ClockFrequency = DataSPIFrequency;
+		}
+
+		/// <summary>
+		/// Sets output volume for left and right channels.
+		/// </summary>
+		/// <param name="leftChannel">Left channel volume from 0 (mute) to 255 (max).</param>
+		/// <param name="rightChannel">Right channel volume from 0 (mute) to 255 (max).</param>
+		/// <remarks>
+		/// VS1053 SCI volume register is inverse-scaled; this method translates user-friendly values internally.
+		/// </remarks>
+		public void SetVolume( byte leftChannel, byte rightChannel )
+		{
+			ushort volume = ( ushort )( ( 255 - leftChannel ) << 8 | ( 255 - rightChannel ) );
+			SciWrite( Register.Volume, volume );
+		}
+
+		/// <summary>
+		/// Runs the VS1053 startup sine test for a fixed duration.
+		/// </summary>
+		/// <param name="durationMs">Duration in milliseconds. Default is 3000.</param>
+		/// <param name="sineCode">VS1053 sine test frequency code. Default is <c>0x44</c>.</param>
+		public void RunStartupSineTest( int durationMs = 3000, byte sineCode = StartupSineFrequency )
+		{
+			StartSineTest( sineCode );
+			Thread.Sleep( durationMs );
+			StopSineTest();
+		}
+
+		/// <summary>
+		/// Starts VS1053 sine test mode.
+		/// </summary>
+		/// <param name="sineCode">VS1053 sine test frequency code.</param>
+		public void StartSineTest( byte sineCode = StartupSineFrequency )
+		{
+			ushort mode = ( ushort )( ( Mode.SdiNew | Mode.AllowSdiTests ) & unchecked(( ushort )~Mode.Line1Selector) );
+			SciWrite( Register.Mode, mode );
+
+			SdiWriteStrictTestFrame(
+			[
+				0x53, 0xEF, 0x6E, sineCode,
+				0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00
+			] );
+		}
+
+		/// <summary>
+		/// Stops VS1053 sine test mode and restores startup register configuration.
+		/// </summary>
+		public void StopSineTest()
+		{
+			SdiWriteStrictTestFrame(
+			[
+				0x45, 0x78, 0x69, 0x74,
+				0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00
+			] );
+
+			SciWrite( Register.Mode, Mode.SdiNew );
+			Thread.Sleep( 20 );
+			ConfigureStartupRegisters();
+			Thread.Sleep( 50 );
+		}
+
+		/// <summary>
+		/// Plays an audio file by determining its format and streaming it to the VS1053 decoder.
+		/// </summary>
+		/// <param name="filePath">Absolute or relative path to the source media file.</param>
+		/// <exception cref="ArgumentException"></exception>
+		/// <exception cref="NotSupportedException"></exception>
+		public void PlaySong( string filePath )
+		{
+			if( string.IsNullOrEmpty( filePath ) )
+			{
+				throw new ArgumentException( "File path cannot be null or empty.", nameof( filePath ) );
+			}
+
+			if( !File.Exists( filePath ) )
+			{
+				throw new ArgumentException( $"File not found: {filePath}" );
+			}
+
+			FileInfo fileInfo = new( filePath );
+
+			_ = fileInfo.Extension.ToLower() switch
+			{
+				".mp3" => PlayFileCore( filePath, "MP3", 2052 ),
+				".wav" => PlayFileCore( filePath, "WAV", 2052 ),
+				".flac" => PlayFileCore( filePath, "FLAC", 12288 ),
+				".ogg" => PlayFileCore( filePath, "OGG", 2052 ),
+				".aac" => PlayFileCore( filePath, "AAC", 2052 ),
+				".m4a" => PlayFileCore( filePath, "M4A", 2052 ),
+				".dsd" or ".dsf" or ".dff" => PlayFileCore( filePath, "DSD", 12288 ),
+				".mid" or ".midi" => PlayMidiSong( filePath ),
+				_ => throw new NotSupportedException( $"Unsupported audio format: {fileInfo.Extension}" )
+			};
+
+			Thread.Sleep( 1000 );
+		}
+
+		/// <summary>
+		/// Plays a MIDI file by initializing the MIDI engine and streaming the file to the VS1053 decoder.
+		/// </summary>
+		/// <param name="filePath">Absolute or relative path to the source MIDI file.</param>
+		/// <returns><see langword="true"/> if the MIDI file was played successfully; otherwise, <see langword="false"/>.</returns>
+		private bool PlayMidiSong( string filePath )
+		{
+			this.midiEngine.Initialize( this.uartControllerName, startListener: false );
+			return this.midiEngine.PlayFileAndRestoreDecodeMode( filePath );
+		}
+
+		/// <summary>
+		/// Reads one or more SCI registers and writes a formatted dump to the debug output.
+		/// </summary>
+		/// <param name="context">Caller-provided context prefix for the debug output.</param>
+		/// <param name="registers">Registers to read and log.</param>
+		public void DumpSciRegisters()
+		{
+			string dreq = this.dreqPin.Read() == GpioPinValue.High ? "HIGH" : "LOW";
+			string output = $"DREQ={dreq}";
+
+			for( int i = 0; i < 16; i++ )
+			{
+				Register register = (Register)i;
+				ushort value = SciRead( register );
+				output += $", SCI_{register}=0x{value:X4}";
+			}
+
+			Debug.WriteLine( output );
+		}
+
+		/// <summary>
+		/// Opens an audio file and streams its payload to the VS1053 decoder over SDI.
+		/// </summary>
+		/// <param name="filePath">Absolute or relative path to the source media file.</param>
+		/// <param name="label">
+		/// Media discriminator used by this method to select format-specific preprocessing.
+		/// Supported values in current callers are <c>"MP3"</c>, <c>"WAV"</c>, <c>"FLAC"</c>, <c>"OGG"</c>, <c>"AAC"</c>, <c>"M4A"</c>, and <c>"DSD"</c>.
+		/// </param>
+		/// <param name="fillerBytes">Number of filler bytes to send after file completion for decoder flush.</param>
+		/// <exception cref="InvalidOperationException">
+		/// Thrown when the computed media payload start offset is outside the file bounds.
+		/// </exception>
+		/// <remarks>
+		/// Format-specific preprocessing (for example MP3 tag skip or WAV bounded payload) is handled by dedicated processors.
+		/// After payload transmission, decoder flush bytes are sent to let the codec finish decoding buffered frames.
+		/// Different formats require different numbers of filler bytes (MP3/WAV/OGG/AAC/M4A: 2052, FLAC/DSD: 12288).
+		/// </remarks>
+		private bool PlayFileCore( string filePath, string label, int fillerBytes )
+		{
+			this.SoftReset();
+
+			try
+			{
+				using var fs = new FileStream( filePath, FileMode.Open, FileAccess.Read );
+
+				long dataStart = 0;
+				long totalFileBytes = fs.Length;
+				MediaPayLoad mediaPayLoad = null!;
+				Stream mediaStream = fs;
+				bool disposeMediaStream = false;
+
+				string extension = Path.GetExtension( filePath );
+				IMediaPreprocessor mediaPreprocessor = PreprocessorRegistry.Resolve( extension );
+				mediaPayLoad = mediaPreprocessor.Process( fs );
+
+				if( mediaPayLoad != null && mediaPayLoad.Stream != null )
+				{
+					mediaStream = mediaPayLoad.Stream;
+					disposeMediaStream = !ReferenceEquals( mediaStream, fs );
+					fillerBytes = mediaPayLoad.FillerBytes;
+					dataStart = mediaStream.CanSeek ? mediaStream.Position : 0;
+					totalFileBytes = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
+				}
+
+				PatchEngine.PatchType patchType = mediaPayLoad != null
+					? mediaPayLoad.PatchType
+					: PatchEngine.PatchType.StandardCodec;
+
+				this.patchEngine.LoadPlugin( patchType );
+
+				long streamLengthForValidation = mediaStream.CanSeek ? mediaStream.Length : fs.Length;
+				if( dataStart >= streamLengthForValidation )
+				{
+					throw new InvalidOperationException( "Invalid media data start position." );
+				}
+
+				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] {label}: Total bytes to send={totalFileBytes}, starting at offset={dataStart}, fillers={fillerBytes}" );
+
+				bool patchBasedContext = mediaPayLoad != null
+					&& ( mediaPayLoad.PatchType == PatchEngine.PatchType.Flac || mediaPayLoad.PatchType == PatchEngine.PatchType.Dsd );
+
+				if( !patchBasedContext )
+				{
+					ConfigureStartupRegisters();
+					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Startup registers configured" );
+				}
+				else
+				{
+					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] {label}: Skipping ConfigureStartupRegisters (patch context active)" );
+				}
+
+
+				int targetSdiClock = ( mediaPayLoad != null && mediaPayLoad.CustomClockFrequency > 0 )
+					? mediaPayLoad.CustomClockFrequency
+					: DataSPIFrequency;
+				this.spiDataDevice.ConnectionSettings.ClockFrequency = targetSdiClock;
+				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] {label}: SDI clock set to {targetSdiClock} Hz" );
+
+				Thread.Sleep( 20 );
+
+				if( mediaPayLoad != null && mediaPayLoad.PatchType == PatchEngine.PatchType.Dsd )
+				{
+					SciWrite( Register.ClockFrequency, DsdClockf );
+					Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] DSD: SCI_CLOCKF set to 0x{DsdClockf:X4}" );
+					Thread.Sleep( 2 );
+				}
+
+				// Adjust volume for WAV - not too low, not too high to avoid distortion
+				if( label == "WAV" )
+				{
+					SetVolume( 250, 250 );  // Moderate volume for WAV
+					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] WAV: Volume set to 250" );
+					//DumpSciRegisters( "[PlayFileCore] WAV", Register.Mode, Register.Status, Register.AudioData );
+				}
+				else if( label == "FLAC" )
+				{
+					SetVolume( 250, 250 );  // Same volume for FLAC
+					Debug.WriteLineIf( EnableVerboseTrace, "[PlayFileCore] FLAC: Volume set to 250" );
+					//DumpSciRegisters( "[PlayFileCore] FLAC", Register.Mode, Register.Status, Register.AudioData, Register.WRAMBaseAddress );
+				}
+
+				bool applyStartupMode = mediaPayLoad == null || mediaPayLoad.RequiresStartupMode;
+				byte startFillByte = mediaPayLoad != null ? mediaPayLoad.StartFillByte : EndFillByte;
+
+				StartSong( applyStartupMode, startFillByte );
+
+				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Song started, streaming {label} data..." );
+
+				long totalBytesStreamed = 0;
+				bool dsdDetectionChecked = mediaPayLoad == null || mediaPayLoad.PatchType != PatchEngine.PatchType.Dsd;
+
+				if( ReferenceEquals( mediaStream, fs ) )
+				{
+					fs.Position = dataStart;
+				}
+
+				int streamChunkSize = ( mediaPayLoad != null && mediaPayLoad.PatchType == PatchEngine.PatchType.Dsd ) ? 8192 : 4096;
+				var chunk = new byte[ streamChunkSize ];
+				int read;
+				long bytesRemaining = mediaStream.CanSeek ? ( totalFileBytes - dataStart ) : long.MaxValue;
+
+				while( ( bytesRemaining > 0 || bytesRemaining == long.MaxValue )
+					&& ( read = mediaStream.Read( chunk, 0, bytesRemaining == long.MaxValue ? chunk.Length : ( int )Math.Min( chunk.Length, bytesRemaining ) ) ) > 0 )
+				{
+					byte[] toWrite = chunk;
+					if( read < chunk.Length )
+					{
+						toWrite = new byte[ read ];
+						Array.Copy( chunk, 0, toWrite, 0, read );
+					}
+
+					totalBytesStreamed += read;
+					if( bytesRemaining != long.MaxValue )
+					{
+						bytesRemaining -= read;
+					}
+
+					SdiWriteChunks( toWrite );
+				}
+
+				if( disposeMediaStream )
+				{
+					mediaStream.Dispose();
+				}
+
+				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Streamed {totalBytesStreamed} bytes for {label}" );
+				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Sending {fillerBytes} filler bytes to {label} decoder..." );
+
+				if( mediaPayLoad != null && mediaPayLoad.PatchType == PatchEngine.PatchType.Dsd )
+				{
+					SdiSendFillers( fillerBytes, DsdEndFillByte );
+				}
+				else
+				{
+					SdiSendFillers( fillerBytes );
+				}
+
+				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Filler bytes sent, decoder flushing..." );
+				Thread.Sleep( 100 );
+
+				ushort headerData0 = SciRead( Register.StreamHeaderData0 );
+				ushort headerData1 = SciRead( Register.StreamHeaderData1 );
+				ushort decodeTime = SciRead( Register.DecodeTime );
+
+				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] Final state: HeaderData0={headerData0:X4}, HeaderData1={headerData1:X4}, DecodeTime={decodeTime}" );
+
+
+				// For WAV, dump all SCI registers to see error status
+				if( label == "WAV" )
+				{
+					//DumpSciRegisters( "[PlayFileCore] WAV Final", Register.Mode, Register.Status, Register.AudioData );
+				}
+				else if( label == "FLAC" )
+				{
+					//DumpSciRegisters( "[PlayFileCore] FLAC Final", Register.Mode, Register.Status, Register.AudioData, Register.WRAMBaseAddress );
+				}
+
+				Debug.WriteLineIf( EnableVerboseTrace, $"[PlayFileCore] {label} playback complete" );
+
+				// Note: No cleanup SoftReset here anymore - it would destroy loaded patches!
+				// If needed, let the caller handle cleanup between different formats.
+			}
+			catch( Exception ex )
+			{
+				Debug.WriteLineIf( EnableVerboseTrace, $"Error during {label} playback: {ex.Message}" );
+				return false;
+			}
+
+			return true;
+		}
+
+		/// <summary>
+		/// Prepares the decoder pipeline and sends initial filler bytes before audio streaming.
+		/// </summary>
+		/// <param name="applyStartupMode">If true, rewrites SCI_MODE to the generic startup mode before playback.</param>
+		/// <param name="fillByte">Fill byte used for initial SDI priming.</param>
+		public void StartSong( bool applyStartupMode = true, byte fillByte = EndFillByte )
+		{
+			if( applyStartupMode )
+			{
+				// Ensure that the mode for baseline playback is set correctly (Line Out, not Microphone!)
+				ushort mode = ( ushort )( this.startupMode & unchecked(( ushort )~Mode.Line1Selector) );
+				SciWrite( Register.Mode, mode );
+				Thread.Sleep( 10 );
+			}
+
+			// Enable amplifier through analog path
+			this.EnableAnalogPath();
+			Thread.Sleep( 10 );
+
+			// Send 10 filler bytes to prepare FIFO
+			SdiSendFillers( 10, fillByte );
+		}
+
+		/// <summary>
+		/// Requests graceful decoding cancellation and drains the VS1053 input buffer.
+		/// </summary>
+		/// <remarks>
+		/// Implements the VS10xx-recommended SM_CANCEL sequence with filler bytes and polling.
+		/// </remarks>
+		public void StopSong()
+		{
+			// Ensure that the mode is set correctly (Line Out, not Microphone!)
+			ushort mode = SciRead( Register.Mode );
+			mode = ( ushort )( mode | Mode.CancelDecodingCurrentFile | Mode.SdiNew );
+			mode &= unchecked(( ushort )~Mode.Line1Selector);  // Line1Selector MUST be 0!
+			SciWrite( Register.Mode, mode );
+			Thread.Sleep( 10 );
+
+			// Send 2052 filler bytes before stopping
+			SdiSendFillers( 2052 );
+
+			// Poll until SM_CANCEL is cleared by the chip (max 20 iterations x 10ms)
+			for( int i = 0; i < 20; i++ )
+			{
+				SdiSendFillers( 32 );
+
+				ushort modeReg = SciRead( Register.Mode );
+
+				if( ( modeReg & Mode.CancelDecodingCurrentFile ) == 0 )
+				{
+					// SM_CANCEL was cleared, song stopped correctly
+					SdiSendFillers( 2052 );
+					Thread.Sleep( 10 );
+					return;
+				}
+
+				Thread.Sleep( 10 );
+			}
+
+		}
+
+		/// <summary>
+		/// Issues a software reset via SCI_MODE and waits for DREQ readiness.
+		/// </summary>
+		public void SoftReset()
+		{
+			SciWrite( Register.Mode, Mode.SdiNew | Mode.SoftReset );
+			Thread.Sleep( 10 );
+			AwaitDataRequest( 500 );
+		}
+
+		/// <summary>
+		/// Sends raw audio data to SDI in codec-sized chunks.
+		/// </summary>
+		/// <param name="data">Input audio payload.</param>
+		/// <remarks>
+		/// If an ID3v2 tag is detected at the beginning, it is skipped automatically.
+		/// </remarks>
+		public void SdiWriteChunks( byte[] data )
+		{
+			if( data == null )
+			{
+				return;
+			}
+
+			SdiWriteChunks( data, 0, data.Length );
+		}
+
+		/// <summary>
+		/// Sends a segment of audio data to SDI in codec-sized chunks.
+		/// </summary>
+		/// <param name="data">Input audio payload.</param>
+		/// <param name="offset">Start offset within <paramref name="data"/>.</param>
+		/// <param name="count">Number of bytes to send.</param>
+		public void SdiWriteChunks( byte[] data, int offset, int count )
+		{
+			SdiWriteChunks( data, offset, count, ChunkSize, true );
+		}
+
+		/// <summary>
+		/// Sends a segment of audio data to SDI in specified chunk sizes.
+		/// </summary>
+		/// <param name="data">Input audio payload.</param>
+		/// <param name="offset">Start offset within <paramref name="data"/>.</param>
+		/// <param name="count">Number of bytes to send.</param>
+		/// <param name="writeChunkSize">Size of each chunk to write to SDI.</param>
+		private void SdiWriteChunks( byte[] data, int offset, int count, int writeChunkSize )
+		{
+			SdiWriteChunks( data, offset, count, writeChunkSize, false );
+		}
+
+		/// <summary>
+		/// Sends a segment of audio data to SDI in specified chunk sizes, optionally skipping ID3v2 tags.
+		/// </summary>
+		/// <param name="data">Input audio payload.</param>
+		/// <param name="offset">Start offset within <paramref name="data"/>.</param>
+		/// <param name="count">Number of bytes to send.</param>
+		/// <param name="writeChunkSize">Size of each chunk to write to SDI.</param>
+		/// <param name="allowId3Skip">Whether to skip ID3v2 tags if detected at the beginning of the data.</param>
+		private void SdiWriteChunks( byte[] data, int offset, int count, int writeChunkSize, bool allowId3Skip )
+		{
+			if( data == null || count <= 0 || offset < 0 || offset >= data.Length )
+			{
+				return;
+			}
+
+			if( offset + count > data.Length )
+			{
+				count = data.Length - offset;
+			}
+
+			if( count <= 0 )
+			{
+				return;
+			}
+
+			if( allowId3Skip && offset == 0 && count > 10 && data[ 0 ] == 'I' && data[ 1 ] == 'D' && data[ 2 ] == '3' )
+			{
+				int tagSize = ( data[ 6 ] << 21 ) | ( data[ 7 ] << 14 ) | ( data[ 8 ] << 7 ) | data[ 9 ];
+				offset = 10 + tagSize;
+				count -= offset;
+			}
+
+			if( count <= 0 )
+			{
+				return;
+			}
+
+			int effectiveChunkSize = writeChunkSize <= 0 ? ChunkSize : writeChunkSize;
+
+			lock( this.spiSync )
+			{
+				int remaining = count;
+				int pos = offset;
+
+				EnableSdi();
+
+				try
+				{
+					while( remaining > 0 )
+					{
+						AwaitDataRequest( 1500 );
+						int chunkSize = Math.Min( effectiveChunkSize, remaining );
+						this.spiDataDevice.Write( data, pos, chunkSize );
+						pos += chunkSize;
+						remaining -= chunkSize;
+					}
+				}
+				finally
+				{
+					DisableSdi();
+				}
+			}
+		}
+
+		/// <summary>
+		/// Sends a specified number of filler bytes to the VS1053 SDI channel.
+		/// </summary>
+		/// <param name="count">The number of filler bytes to send.</param>
+		private void SdiSendFillers( int count )
+		{
+			SdiSendFillers( count, EndFillByte );
+		}
+
+		/// <summary>
+		/// Sends a specified number of filler bytes to the VS1053 SDI channel using a custom fill byte.
+		/// </summary>
+		/// <param name="count">The number of filler bytes to send.</param>
+		/// <param name="fillByte">Fill byte value to transmit.</param>
+		private void SdiSendFillers( int count, byte fillByte )
+		{
+			if( count <= 0 )
+			{
+				return;
+			}
+
+			for( int i = 0; i < ChunkSize; i++ )
+			{
+				this.dataBlock[ i ] = fillByte;
+			}
+
+			lock( this.spiSync )
+			{
+				int remaining = count;
+				while( remaining > 0 )
+				{
+					AwaitDataRequest( 1500 );
+
+					int chunkSize = Math.Min( ChunkSize, remaining );
+
+					EnableSdi();
+
+					try
+					{
+						this.spiDataDevice.Write( this.dataBlock, 0, chunkSize );
+					}
+					finally
+					{
+						DisableSdi();
+					}
+					remaining -= chunkSize;
+				}
+			}
+		}
+
+		/// <summary>
+		/// Waits until DREQ is high or throws on timeout.
+		/// </summary>
+		/// <param name="timeoutMs">Maximum wait time in milliseconds.</param>
+		/// <exception cref="TimeoutException">Thrown if DREQ does not become high in time.</exception>
+		public void AwaitDataRequest( int timeoutMs = 1000 )
+		{
+			if( this.dreqPin.Read() == GpioPinValue.High )
+			{
+				return;
+			}
+
+			var startTime = DateTime.UtcNow;
+			int spinCount = 0;
+
+			while( this.dreqPin.Read() == GpioPinValue.Low )
+			{
+				if( DreqPollIntervalMs > 0 )
+				{
+					Thread.Sleep( DreqPollIntervalMs );
+				}
+
+				spinCount++;
+				if( ( spinCount & 0x1F ) == 0 )
+				{
+					var elapsedMs = ( int )( DateTime.UtcNow - startTime ).TotalMilliseconds;
+					if( elapsedMs >= timeoutMs )
+					{
+						throw new TimeoutException( "VS1053 DREQ timeout." );
+					}
+				}
+			}
+		}
+
+		/// <summary>
+		/// Waits for patch-triggered restart completion by synchronizing on DREQ state.
+		/// </summary>
+		/// <param name="lowDetectWindowMs">Time window to observe an expected DREQ low pulse.</param>
+		/// <param name="readyTimeoutMs">Maximum time to wait for stable DREQ high readiness.</param>
+		public void AwaitPatchReady( int lowDetectWindowMs = 300, int readyTimeoutMs = 2000 )
+		{
+			int waited = 0;
+
+			while( waited < lowDetectWindowMs && this.dreqPin.Read() == GpioPinValue.High )
+			{
+				Thread.Sleep( 1 );
+				waited++;
+			}
+
+			WaitDreqStableHigh( 3, readyTimeoutMs );
+		}
+
+		/// <summary>
+		/// Writes baseline SCI register configuration used after reset and recovery paths.
+		/// </summary>
+		/// <remarks>
+		/// Also clears the decoded-header status bit and enables analog output stage.
+		/// </remarks>
+		public void ConfigureStartupRegisters()
+		{
+			ushort mode = this.startupMode;
+			mode &= unchecked(( ushort )~Mode.SoftReset);
+			mode &= unchecked(( ushort )~Mode.Line1Selector);
+			SciWrite( Register.Mode, mode );
+			SciWrite( Register.ClockFrequency, RecommendedClockf );
+			SciWrite( Register.BassTreble, 0x0000 );
+
+			// Clear SS_DO_NOT_JUMP (bit 15 in SCI_STATUS) per VS10xx note after reset/cancel paths.
+			ushort status = SciRead( Register.Status );
+			status &= unchecked(( ushort )~Status.DecodedHeader);
+			SciWrite( Register.Status, status );
+
+			EnableAnalogPath();
+			SetVolume( 250, 250 );
+		}
+
+		/// <summary>
+		/// Performs a hardware reset of the VS1053 and waits for DREQ to become high.
+		/// </summary>
+		public void ResetHardware()
+		{
+			DisableSci();
+			DisableSdi();
+
+			this.resetPin.Write( GpioPinValue.Low );
+			Thread.Sleep( 5 );
+			this.resetPin.Write( GpioPinValue.High );
+			Thread.Sleep( 5 );
+
+			PrimeSpi();
+			WaitDreqStableHigh( 10, 2000 );
+		}
+
+		/// <summary>
+		/// Clears analog power-down bits in SCI_STATUS to enable the analog output path.
+		/// </summary>
+		public void EnableAnalogPath()
+		{
+			ushort status = SciRead( Register.Status );
+			status &= unchecked(( ushort )~( Status.AnalogDriverPowerdown | Status.AnalogInternalPowerdown ));
+			SciWrite( Register.Status, status );
+			Thread.Sleep( 2 );
+		}
+
+		/// <summary>
+		/// Writes a 16-bit value to a VS1053 SCI register at the specified address.
+		/// </summary>
+		/// <param name="address">The address of the SCI register.</param>
+		/// <param name="data">The 16-bit value to write.</param>
+		private void SciWrite( Register register, ushort data )
+		{
+			AwaitDataRequest( 1500 );
+
+			this.cmdBuffer[ 0 ] = 0x02;
+			this.cmdBuffer[ 1 ] = ( byte )register;
+			this.cmdBuffer[ 2 ] = ( byte )( data >> 8 );
+			this.cmdBuffer[ 3 ] = ( byte )data;
+
+			lock( this.spiSync )
+			{
+				EnableSci();
+
+				try
+				{
+					this.spiCmdDevice.Write( this.cmdBuffer );
+				}
+				finally
+				{
+					DisableSci();
+				}
+			}
+
+			AwaitDataRequest( 1500 );
+		}
+
+		/// <summary>
+		/// Writes a 16-bit value to a VS1053 SCI register at the specified address, with a single retry on timeout.
+		/// </summary>
+		/// <param name="address">The address of the SCI register.</param>
+		/// <param name="data">The 16-bit value to write.</param>
+		private void SciWriteWithRecovery( Register register, ushort data )
+		{
+			for( int attempt = 0; attempt < 2; attempt++ )
+			{
+				try
+				{
+					SciWrite( register, data );
+					return;
+				}
+				catch( TimeoutException )
+				{
+					if( attempt == 1 )
+					{
+						throw;
+					}
+
+					ResetHardware();
+					ConfigureStartupRegisters();
+					WaitDreqStableHigh( 3, 1000 );
+					Thread.Sleep( 20 );
+				}
+			}
+		}
+
+		/// <summary>
+		/// Reads a 16-bit value from a VS1053 SCI register at the specified address.
+		/// </summary>
+		/// <param name="address">The address of the SCI register.</param>
+		/// <returns>The 16-bit value read from the SCI register.</returns>
+		private ushort SciRead( Register register )
+		{
+			AwaitDataRequest( 1500 );
+
+			this.cmdBuffer[ 0 ] = 0x03;
+			this.cmdBuffer[ 1 ] = ( byte )register;
+			this.cmdBuffer[ 2 ] = 0xFF;
+			this.cmdBuffer[ 3 ] = 0xFF;
+
+			var read = new byte[ 4 ];
+
+			lock( this.spiSync )
+			{
+				EnableSci();
+
+				try
+				{
+					this.spiCmdDevice.TransferFullDuplex( this.cmdBuffer, 0, this.cmdBuffer.Length, read, 0, read.Length );
+				}
+				finally
+				{
+					DisableSci();
+				}
+			}
+
+			AwaitDataRequest( 1500 );
+
+			return ( ushort )( ( read[ 2 ] << 8 ) | read[ 3 ] );
+		}
+
+		/// <summary>
+		/// Writes a byte array to the VS1053 SDI channel in chunks, waiting for DREQ readiness.	
+		/// </summary>
+		/// <param name="data">The byte array to write.</param>
+		private void SdiWrite( byte[] data )
+		{
+			SdiWrite( data, 0, data.Length );
+		}
+
+		/// <summary>
+		/// Writes a portion of a byte array to the VS1053 SDI channel in chunks, waiting for DREQ readiness.
+		/// </summary>
+		/// <param name="data">The byte array to write.</param>
+		/// <param name="offset">The zero-based byte offset in the array at which to begin writing bytes.</param>
+		/// <param name="count">The number of bytes to write.</param>
+		/// <exception cref="ArgumentOutOfRangeException">Thrown when the offset or count is out of range.</exception>
+		private void SdiWrite( byte[] data, int offset, int count )
+		{
+			if( count <= 0 )
+			{
+				return;
+			}
+
+			if( offset < 0 || count < 0 || offset + count > data.Length )
+			{
+				throw new ArgumentOutOfRangeException();
+			}
+
+			lock( this.spiSync )
+			{
+				int remaining = count;
+				int position = offset;
+
+				EnableSdi();
+
+				try
+				{
+					while( remaining > 0 )
+					{
+						AwaitDataRequest( 1500 );
+
+						int chunk = remaining > ChunkSize ? ChunkSize : remaining;
+						Array.Copy( data, position, this.dataBlock, 0, chunk );
+
+						this.spiDataDevice.Write( this.dataBlock, 0, chunk );
+
+						position += chunk;
+						remaining -= chunk;
+					}
+				}
+				finally
+				{
+					DisableSdi();
+				}
+			}
+		}
+
+		/// <summary>
+		/// Writes a strict test frame to the VS1053 SDI channel, one byte at a time, waiting for DREQ readiness before each byte.
+		/// </summary>
+		/// <param name="frame">The byte array representing the strict test frame to write.</param>
+		/// <exception cref="ArgumentNullException">Thrown when the frame is null.</exception>
+		private void SdiWriteStrictTestFrame( byte[] frame )
+		{
+			if( frame == null )
+			{
+				throw new ArgumentNullException( nameof( frame ) );
+			}
+
+			AwaitDataRequest( 500 );
+
+			lock( this.spiSync )
+			{
+				EnableSdi();
+
+				try
+				{
+					for( int index = 0; index < frame.Length; index++ )
+					{
+						this.singleByteBuffer[ 0 ] = frame[ index ];
+						this.spiDataDevice.Write( this.singleByteBuffer );
+					}
+				}
+				finally
+				{
+					DisableSdi();
+				}
+			}
+		}
+
+		/// <summary>
+		/// Waits until DREQ remains high continuously for the requested stability window.
+		/// </summary>
+		/// <param name="stableMs">Required consecutive milliseconds with DREQ high.</param>
+		/// <param name="timeoutMs">Maximum total wait time in milliseconds.</param>
+		/// <exception cref="TimeoutException">Thrown if stable high is not reached in time.</exception>
+		private void WaitDreqStableHigh( int stableMs, int timeoutMs )
+		{
+			int waited = 0;
+			int stable = 0;
+
+			while( waited < timeoutMs )
+			{
+				if( this.dreqPin.Read() == GpioPinValue.High )
+				{
+					stable++;
+					if( stable >= stableMs )
+					{
+						return;
+					}
+				}
+				else
+				{
+					stable = 0;
+				}
+
+				Thread.Sleep( 1 );
+				waited++;
+			}
+
+			throw new TimeoutException( "VS1053 DREQ not stably high." );
+		}
+
+		/// <summary>
+		/// Sends dummy SPI transfers to warm up the bus after reset.
+		/// </summary>
+		private void PrimeSpi()
+		{
+			var tx = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF };
+			var rx = new byte[ tx.Length ];
+
+			lock( this.spiSync )
+			{
+				this.spiCmdDevice.TransferFullDuplex( tx, 0, tx.Length, rx, 0, rx.Length );
+				this.spiCmdDevice.TransferFullDuplex( tx, 0, tx.Length, rx, 0, rx.Length );
+			}
+		}
+
+		/// <summary>
+		/// Selects the SCI/command channel by pulling its chip-select line low.
+		/// </summary>
+		private void EnableSci()
+		{
+			this.cmdCsPin.Write( GpioPinValue.Low );
+		}
+
+		/// <summary>
+		/// Deselects the SCI/command channel by pulling its chip-select line high.
+		/// </summary>
+		private void DisableSci()
+		{
+			this.cmdCsPin.Write( GpioPinValue.High );
+		}
+
+		/// <summary>
+		/// Selects the SDI/data channel by pulling its chip-select line low.
+		/// </summary>
+		private void EnableSdi()
+		{
+			this.datCsPin.Write( GpioPinValue.Low );
+		}
+
+		/// <summary>
+		/// Deselects the SDI/data channel by pulling its chip-select line high.
+		/// </summary>
+		private void DisableSdi()
+		{
+			this.datCsPin.Write( GpioPinValue.High );
+		}
+	}
+}
