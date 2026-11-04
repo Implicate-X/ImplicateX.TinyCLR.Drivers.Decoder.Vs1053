@@ -10,25 +10,18 @@ public class Board
 
 	public Board()
 	{
-		//GpioPin cmdCsPin = GpioController.GetDefault().OpenPin( FEZDuino.GpioPin.PC5 );
-		//cmdCsPin.SetDriveMode( GpioPinDriveMode.Output );
-		//cmdCsPin.Write( GpioPinValue.Low );
-
-		//GpioPin datCsPin = GpioController.GetDefault().OpenPin( FEZDuino.GpioPin.PC6 );
-		//datCsPin.SetDriveMode( GpioPinDriveMode.Output );
-		//datCsPin.Write( GpioPinValue.Low );
-
 		_ = new Storage();
 
 		vs1053 = new Vs1053(
-			uartControllerName: FEZDuino.UartPort.Uart1,
 			spiControllerName: FEZDuino.SpiBus.Spi6,
 			cmdCsPinID: FEZDuino.GpioPin.PC5,
 			datCsPinID: FEZDuino.GpioPin.PC4,
 			dreqPinID: FEZDuino.GpioPin.PC6,
 			resetPinID: FEZDuino.GpioPin.PC7 );
 			//gpio0PinID: FEZDuino.GpioPin.PA1,
-			//gpio1PinID: FEZDuino.GpioPin.PA2 );
+			//gpio1PinID: FEZDuino.GpioPin.PA2,
+			// uartControllerName: FEZDuino.UartPort.Uart1
+
 		vs1053.Initialize();
 
 		Vs1053.HealthCheckReport healthReport = vs1053.CheckHealth();

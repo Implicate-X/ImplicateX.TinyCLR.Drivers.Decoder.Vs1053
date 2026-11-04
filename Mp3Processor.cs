@@ -85,33 +85,61 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 
 					fs.Position = 0;
 
-					var probe = new byte[ scanLen ];
-					int got = fs.Read( probe, 0, probe.Length );
-
-					if( got < 2 )
+					// Fast path: handle ID3v2 tag at file start without allocating a large probe buffer.
+					if( scanLen >= 10 )
 					{
-						return 0;
-					}
+						var id3Header = new byte[ 10 ];
+						int id3Read = fs.Read( id3Header, 0, id3Header.Length );
 
-					for( int i = 0; i <= got - 2; i++ )
-					{
-						if( probe[ i ] == 0xFF && ( probe[ i + 1 ] & 0xE0 ) == 0xE0 )
+						if( id3Read == 10
+							&& id3Header[ 0 ] == ( byte )'I'
+							&& id3Header[ 1 ] == ( byte )'D'
+							&& id3Header[ 2 ] == ( byte )'3' )
 						{
-							return i;
-						}
-					}
-
-					for( int i = 0; i <= got - 10; i++ )
-					{
-						if( probe[ i ] == ( byte )'I' && probe[ i + 1 ] == ( byte )'D' && probe[ i + 2 ] == ( byte )'3' )
-						{
-							int size = ( probe[ i + 6 ] << 21 ) | ( probe[ i + 7 ] << 14 ) | ( probe[ i + 8 ] << 7 ) | probe[ i + 9 ];
-							long pos = i + 10 + size;
+							int size = ( id3Header[ 6 ] << 21 ) | ( id3Header[ 7 ] << 14 ) | ( id3Header[ 8 ] << 7 ) | id3Header[ 9 ];
+							long pos = 10 + size;
 							if( pos < fs.Length )
 							{
 								return pos;
 							}
 						}
+					}
+
+					fs.Position = 0;
+					const int ProbeChunkSize = 512;
+					var probe = new byte[ ProbeChunkSize + 1 ];
+					int carry = 0;
+					long scanned = 0;
+
+					while( scanned < scanLen )
+					{
+						int toRead = ( int )Math.Min( ProbeChunkSize, scanLen - scanned );
+						int got = fs.Read( probe, carry, toRead );
+						if( got <= 0 )
+						{
+							break;
+						}
+
+						int total = carry + got;
+						for( int i = 0; i <= total - 2; i++ )
+						{
+							if( probe[ i ] == 0xFF && ( probe[ i + 1 ] & 0xE0 ) == 0xE0 )
+							{
+								return ( scanned - carry ) + i;
+							}
+						}
+
+						if( total > 0 )
+						{
+							probe[ 0 ] = probe[ total - 1 ];
+							carry = 1;
+						}
+						else
+						{
+							carry = 0;
+						}
+
+						scanned += got;
 					}
 
 					return 0;

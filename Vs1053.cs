@@ -136,6 +136,11 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		/// UART controller name for MIDI playback.
 		/// </summary>
 		private readonly string uartControllerName;
+
+		/// <summary>
+		/// Indicates whether streaming mode is currently active.
+		/// </summary>
+		private bool isStreaming;
 		private enum Register : byte
 		{
 			/// <summary>
@@ -429,14 +434,14 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		/// Startup SPI frequency is applied to both devices; higher SDI speed is configured later in <see cref="Initialize"/>.
 		/// </remarks>
 		public Vs1053(
-			string uartControllerName,
 			string spiControllerName,
 			int cmdCsPinID,
 			int datCsPinID,
 			int dreqPinID,
 			int resetPinID,
 			int gpio0PinID = -1,
-			int gpio1PinID = -1 )
+			int gpio1PinID = -1,
+			string uartControllerName = "" )
 		{
 			this.patchEngine = new PatchEngine( this );
 			this.midiEngine = new MidiEngine( this );
@@ -890,7 +895,9 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 					fs.Position = dataStart;
 				}
 
-				int streamChunkSize = ( mediaPayLoad != null && mediaPayLoad.PatchType == PatchEngine.PatchType.Dsd ) ? 8192 : 4096;
+				// Keep USB/file-system read latency low on constrained boards (e.g., FEZ Feather)
+				// to reduce SDI feed gaps that can cause audible bubbling.
+				int streamChunkSize = ( mediaPayLoad != null && mediaPayLoad.PatchType == PatchEngine.PatchType.Dsd ) ? 8192 : 512;
 				var chunk = new byte[ streamChunkSize ];
 				int read;
 				long bytesRemaining = mediaStream.CanSeek ? ( totalFileBytes - dataStart ) : long.MaxValue;
@@ -898,20 +905,13 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 				while( ( bytesRemaining > 0 || bytesRemaining == long.MaxValue )
 					&& ( read = mediaStream.Read( chunk, 0, bytesRemaining == long.MaxValue ? chunk.Length : ( int )Math.Min( chunk.Length, bytesRemaining ) ) ) > 0 )
 				{
-					byte[] toWrite = chunk;
-					if( read < chunk.Length )
-					{
-						toWrite = new byte[ read ];
-						Array.Copy( chunk, 0, toWrite, 0, read );
-					}
-
 					totalBytesStreamed += read;
 					if( bytesRemaining != long.MaxValue )
 					{
 						bytesRemaining -= read;
 					}
 
-					SdiWriteChunks( toWrite );
+					SdiWriteChunks( chunk, 0, read );
 				}
 
 				if( disposeMediaStream )
@@ -986,6 +986,49 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 
 			// Send 10 filler bytes to prepare FIFO
 			SdiSendFillers( 10, fillByte );
+		}
+
+		/// <summary>
+		/// Prepares the decoder for continuous streaming input.
+		/// </summary>
+		public void StartStream()
+		{
+			this.SoftReset();
+			this.patchEngine.LoadPlugin( PatchEngine.PatchType.StandardCodec );
+			ConfigureStartupRegisters();
+			this.spiDataDevice.ConnectionSettings.ClockFrequency = DataSPIFrequency;
+			StartSong( applyStartupMode: true, fillByte: EndFillByte );
+			this.isStreaming = true;
+		}
+
+		/// <summary>
+		/// Sends one stream chunk to the decoder.
+		/// </summary>
+		/// <param name="buffer">Chunk buffer.</param>
+		/// <param name="offset">Start offset inside <paramref name="buffer"/>.</param>
+		/// <param name="count">Number of bytes to send.</param>
+		public void WriteStreamChunk( byte[] buffer, int offset, int count )
+		{
+			if( !this.isStreaming || buffer == null || count <= 0 )
+			{
+				return;
+			}
+
+			SdiWriteChunks( buffer, offset, count );
+		}
+
+		/// <summary>
+		/// Stops active stream playback and flushes the decoder.
+		/// </summary>
+		public void StopStream()
+		{
+			if( !this.isStreaming )
+			{
+				return;
+			}
+
+			StopSong();
+			this.isStreaming = false;
 		}
 
 		/// <summary>
