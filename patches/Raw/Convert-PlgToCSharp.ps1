@@ -27,17 +27,36 @@ function Parse-PlgFile {
 
 	$content = Get-Content -Path $FilePath -Raw
 
-	# Find array boundaries
-	$startIdx = $content.IndexOf('{')
-	$endIdx = $content.LastIndexOf('}')
+	# Find "plugin[] = {" to avoid parsing helper/sample code in the header
+	$pluginArrayMarker = "plugin[] = {"
+	$pluginStartPos = $content.IndexOf($pluginArrayMarker)
 
-	if ($startIdx -lt 0 -or $endIdx -lt 0) {
-		Write-Warning "Invalid .plg format in $FilePath - no array boundaries found"
+	if ($pluginStartPos -lt 0) {
+		Write-Warning "Invalid .plg format in $FilePath - 'plugin[] = {' not found"
 		return @()
 	}
 
-	# Extract array content
-	$arrayContent = $content.Substring($startIdx + 1, $endIdx - $startIdx - 1)
+	$contentStart = $pluginStartPos + $pluginArrayMarker.Length
+
+	# Find matching closing brace for the plugin array
+	$braceCount = 1
+	$contentEnd = $contentStart
+	while ($contentEnd -lt $content.Length -and $braceCount -gt 0) {
+		if ($content[$contentEnd] -eq '{') {
+			$braceCount++
+		} elseif ($content[$contentEnd] -eq '}') {
+			$braceCount--
+		}
+		$contentEnd++
+	}
+
+	if ($braceCount -ne 0) {
+		Write-Warning "Invalid .plg format in $FilePath - mismatched braces"
+		return @()
+	}
+
+	# Extract array content (between plugin[] = { and matching })
+	$arrayContent = $content.Substring($contentStart, $contentEnd - $contentStart - 1)
 
 	# Parse hex values using regex
 	$hexPattern = '0x[0-9A-Fa-f]+'

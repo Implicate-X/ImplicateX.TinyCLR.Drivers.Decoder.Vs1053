@@ -645,7 +645,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		/// <param name="includeSineTest"><see langword="true"/> to include the audible sine startup test.</param>
 		/// <param name="sineDurationMs">Sine test duration in milliseconds when enabled.</param>
 		/// <returns>A report with one return code per test and an overall health state.</returns>
-		public HealthCheckReport CheckHealth( bool includeSineTest = true, int sineDurationMs = 300 )
+		public HealthCheckReport CheckHealth( bool includeSineTest = false, int sineDurationMs = 2000 )
 		{
 			var results = new List<HealthTestResult>();
 			ushort originalVolume = 0;
@@ -752,7 +752,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 					try
 					{
 						StartSineTest();
-						Thread.Sleep( Math.Max( 50, sineDurationMs ) );
+						Thread.Sleep( sineDurationMs );
 						StopSineTest();
 						results.Add( new HealthTestResult( HealthTest.SineStartStop, HealthCode.Success, "Sine test start/stop sequence completed." ) );
 					}
@@ -1253,6 +1253,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 			ushort mode = this.startupMode;
 			mode &= unchecked(( ushort )~Mode.SoftReset);
 			mode &= unchecked(( ushort )~Mode.Line1Selector);
+
 			SciWrite( Register.Mode, mode );
 			SciWrite( Register.ClockFrequency, RecommendedClockf );
 			SciWrite( Register.BassTreble, 0x0000 );
