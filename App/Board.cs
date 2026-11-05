@@ -1,6 +1,9 @@
 ﻿#define FEATHER
 #define FEATHER_SPI6
+//#define DUINO
+//#define DUINO_SPI6
 #define TEST_FLAC
+//#define HEALTH_CHECK
 
 using System.Diagnostics;
 using GHIElectronics.TinyCLR.Pins;
@@ -35,7 +38,7 @@ public class Board
 	}
 #endif
 
-	private Vs1053 audioCodec = null!;
+	private readonly Vs1053 audioCodec = null!;
 
 	public Board()
 	{
@@ -51,7 +54,8 @@ public class Board
 		audioCodec.Initialize();
 
 #if HEALTH_CHECK
-		Vs1053.HealthCheckReport healthReport = audioCodec.CheckHealth( true );
+		Vs1053.HealthCheckReport healthReport = 
+			audioCodec.CheckHealth( includeSineTest: true );
 
 		Debug.WriteLine
 		(
