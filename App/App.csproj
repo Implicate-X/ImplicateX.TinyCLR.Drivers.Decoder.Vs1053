@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="..\packages\GHIElectronics.TinyCLR.Devices.UsbClient.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.UsbClient.props" Condition="Exists('..\packages\GHIElectronics.TinyCLR.Devices.UsbClient.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.UsbClient.props')" />
   <Import Project="..\packages\GHIElectronics.TinyCLR.Devices.Spi.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.Spi.props" Condition="Exists('..\packages\GHIElectronics.TinyCLR.Devices.Spi.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.Spi.props')" />
   <Import Project="..\packages\GHIElectronics.TinyCLR.Devices.UsbHost.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.UsbHost.props" Condition="Exists('..\packages\GHIElectronics.TinyCLR.Devices.UsbHost.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.UsbHost.props')" />
   <Import Project="..\packages\GHIElectronics.TinyCLR.Devices.Usb.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.Usb.props" Condition="Exists('..\packages\GHIElectronics.TinyCLR.Devices.Usb.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.Usb.props')" />
@@ -65,6 +66,9 @@
     <Reference Include="GHIElectronics.TinyCLR.Devices.Usb, Version=3.0.2.1000, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\GHIElectronics.TinyCLR.Devices.Usb.3.0.2.1000\lib\net48\GHIElectronics.TinyCLR.Devices.Usb.dll</HintPath>
     </Reference>
+    <Reference Include="GHIElectronics.TinyCLR.Devices.UsbClient, Version=3.0.2.1000, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\GHIElectronics.TinyCLR.Devices.UsbClient.3.0.2.1000\lib\net48\GHIElectronics.TinyCLR.Devices.UsbClient.dll</HintPath>
+    </Reference>
     <Reference Include="GHIElectronics.TinyCLR.Devices.UsbHost, Version=3.0.2.1000, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\GHIElectronics.TinyCLR.Devices.UsbHost.3.0.2.1000\lib\net48\GHIElectronics.TinyCLR.Devices.UsbHost.dll</HintPath>
     </Reference>
@@ -104,5 +108,6 @@
     <Error Condition="!Exists('..\packages\GHIElectronics.TinyCLR.Devices.Usb.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.Usb.props')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\GHIElectronics.TinyCLR.Devices.Usb.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.Usb.props'))" />
     <Error Condition="!Exists('..\packages\GHIElectronics.TinyCLR.Devices.UsbHost.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.UsbHost.props')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\GHIElectronics.TinyCLR.Devices.UsbHost.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.UsbHost.props'))" />
     <Error Condition="!Exists('..\packages\GHIElectronics.TinyCLR.Devices.Spi.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.Spi.props')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\GHIElectronics.TinyCLR.Devices.Spi.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.Spi.props'))" />
+    <Error Condition="!Exists('..\packages\GHIElectronics.TinyCLR.Devices.UsbClient.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.UsbClient.props')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\GHIElectronics.TinyCLR.Devices.UsbClient.3.0.2.1000\build\net48\GHIElectronics.TinyCLR.Devices.UsbClient.props'))" />
   </Target>
 </Project>

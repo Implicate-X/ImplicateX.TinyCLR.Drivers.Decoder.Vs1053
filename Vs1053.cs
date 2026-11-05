@@ -42,11 +42,11 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		/// <summary>
 		/// Startup SPI frequency for the VS1053 chip.
 		/// </summary>
-		private const int StartupSPIFrequency = 250_000;
+		private const int StartupSPIFrequency = 2_000_000;
 		/// <summary>
 		/// Default SDI/data SPI frequency for the VS1053 chip.
 		/// </summary>
-		private const int DataSPIFrequency = 5_000_000;
+		private const int DataSPIFrequency = 2_000_000;
 		/// <summary>
 		/// Higher SDI/data SPI frequency used for DSD streams that require more sustained throughput.
 		/// </summary>

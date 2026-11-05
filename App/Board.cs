@@ -1,16 +1,19 @@
-﻿//#define FEATHER
+﻿#define FEATHER
+#define FEATHER_SPI4
 //#define FEATHER_SPI6
 //#define DUINO
 //#define DUINO_SPI6
-#define PICO
+//#define PICO
 //#define PICO_SPI1
-#define PICO_SPI2
-#define TEST_FLAC
+//#define PICO_SPI2
+//#define TEST_FLAC
+//#define TEST_MP3
 #define HEALTH_CHECK
 
+using System.Threading;
 using System.Diagnostics;
 using GHIElectronics.TinyCLR.Pins;
-
+using GHIElectronics.TinyCLR.Devices.Gpio;
 namespace ImplicateX.TinyCLR.Drivers.Decoder;
 
 public class Board
@@ -22,7 +25,7 @@ public class Board
 #elif DUINO_SPI6
 	public static readonly string SpiControllerName = FEZDuino.SpiBus.Spi6;
 #elif PICO_SPI1
-	public static readonly string SpiControllerName = FEZPico.SpiBus.Spi1;
+	public static readonly string SpiControllerName = SC13048.SpiBus.Spi1;
 #elif PICO_SPI2
 	public static readonly string SpiControllerName = FEZPico.SpiBus.Spi2;
 #endif
@@ -59,7 +62,12 @@ public class Board
 	{
 		#if DUINO || FEATHER
 		_ = new Storage();
-		#endif
+#endif
+
+		GpioController gpioController = GpioController.GetDefault();
+		GpioPin pinPd15 = gpioController.OpenPin( 63 );
+		pinPd15.SetDriveMode( GpioPinDriveMode.Output );
+		pinPd15.Write( GpioPinValue.High );
 
 		audioCodec = new Vs1053(
 			spiControllerName: SpiControllerName,
