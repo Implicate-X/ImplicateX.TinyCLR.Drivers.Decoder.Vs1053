@@ -1,9 +1,12 @@
-﻿#define FEATHER
-#define FEATHER_SPI6
+﻿//#define FEATHER
+//#define FEATHER_SPI6
 //#define DUINO
 //#define DUINO_SPI6
+#define PICO
+//#define PICO_SPI1
+#define PICO_SPI2
 #define TEST_FLAC
-//#define HEALTH_CHECK
+#define HEALTH_CHECK
 
 using System.Diagnostics;
 using GHIElectronics.TinyCLR.Pins;
@@ -18,7 +21,11 @@ public class Board
     public static readonly string SpiControllerName = FEZFeather.SpiBus.Spi4;
 #elif DUINO_SPI6
 	public static readonly string SpiControllerName = FEZDuino.SpiBus.Spi6;
-	#endif
+#elif PICO_SPI1
+	public static readonly string SpiControllerName = FEZPico.SpiBus.Spi1;
+#elif PICO_SPI2
+	public static readonly string SpiControllerName = FEZPico.SpiBus.Spi2;
+#endif
 
 #if FEATHER
 	public static class ControllerPin
@@ -36,13 +43,23 @@ public class Board
 		public const int CodecDREQ = FEZDuino.GpioPin.PC6;
 		public const int CodecReset = FEZDuino.GpioPin.PC7;
 	}
-#endif
+#elif PICO
+	public static class ControllerPin
+	{
+		public const int CodecCS = FEZPico.GpioPin.PH0;
+		public const int CodecDCS = FEZPico.GpioPin.PH3;
+		public const int CodecDREQ = FEZPico.GpioPin.PH1;
+		public const int CodecReset = FEZPico.GpioPin.PA13;
+	}
+	#endif
 
 	private readonly Vs1053 audioCodec = null!;
 
 	public Board()
 	{
+		#if DUINO || FEATHER
 		_ = new Storage();
+		#endif
 
 		audioCodec = new Vs1053(
 			spiControllerName: SpiControllerName,
@@ -76,12 +93,12 @@ public class Board
 #else
 		audioCodec.SetVolume( 10, 10 );
 
-		#if TEST_MIDI
+#if TEST_MIDI
 		audioCodec.PlaySong( @"A:\Usa-Hymn.mid" );
-		#endif
-		#if TEST_MP3
+#endif
+#if TEST_MP3
 		audioCodec.PlaySong( @"A:\Abba- Thank You for the Music.mp3" );
-		#endif
+#endif
 		#if TEST_FLAC
 		audioCodec.PlaySong( @"A:\All by Myself.flac" );
 #endif

@@ -93,14 +93,6 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="patches\Dsd\ImplicateX.TinyCLR.Drivers.Decoder.Patch.Dsd.csproj">
-      <Project>{C880AD8D-843D-4CBF-8A77-3DFA9EE7FDA5}</Project>
-      <Name>ImplicateX.TinyCLR.Drivers.Decoder.Patch.Dsd</Name>
-    </ProjectReference>
-    <ProjectReference Include="patches\FlacLatm\ImplicateX.TinyCLR.Drivers.Decoder.Patch.FlacLatm.csproj">
-      <Project>{49FE3ECE-859C-42A0-85F9-F72C05D3606B}</Project>
-      <Name>ImplicateX.TinyCLR.Drivers.Decoder.Patch.FlacLatm</Name>
-    </ProjectReference>
     <ProjectReference Include="patches\Flac\ImplicateX.TinyCLR.Drivers.Decoder.Patch.Flac.csproj">
       <Project>{5DB4D954-8077-4820-9046-0A3FDA79F11A}</Project>
       <Name>ImplicateX.TinyCLR.Drivers.Decoder.Patch.Flac</Name>

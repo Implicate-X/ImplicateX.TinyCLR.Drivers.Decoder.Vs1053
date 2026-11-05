@@ -51,10 +51,10 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 				ushort[] pluginData = patchType switch
 				{
 					PatchType.StandardCodec => Standard.Data,
-					PatchType.Dsd => Dsd.Data,
+					//PatchType.Dsd => Dsd.Data,
 					PatchType.Flac => Flac.Data,
 					PatchType.Latm => Latm.Data,
-					PatchType.FlacLatm => FlacLatm.Data,
+					//PatchType.FlacLatm => FlacLatm.Data,
 					PatchType.Pitch => Pitch.Data,
 					_ => throw new NotSupportedException( $"Patch type '{patchType}' is currently not embedded as resource." ),
 				};
