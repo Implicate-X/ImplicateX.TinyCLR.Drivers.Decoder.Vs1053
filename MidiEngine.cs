@@ -172,10 +172,15 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 
 					if( device.resetPin != null )
 					{
-						device.resetPin.Write( GpioPinValue.Low );
-						Thread.Sleep( 10 );
-						device.resetPin.Write( GpioPinValue.High );
-						Thread.Sleep( 20 );
+						lock( device.patchSync )
+						{
+							device.hasLoadedPatch = false;
+							device.patchResetRequired = true;
+							device.resetPin.Write( GpioPinValue.Low );
+							Thread.Sleep( 10 );
+							device.resetPin.Write( GpioPinValue.High );
+							Thread.Sleep( 20 );
+						}
 						Debug.WriteLineIf( EnableVerboseTrace, "VS1053 reset pulse applied." );
 					}
 				}

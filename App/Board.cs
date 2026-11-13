@@ -1,14 +1,14 @@
 ﻿#define FEATHER
-#define FEATHER_SPI4
-//#define FEATHER_SPI6
+//#define FEATHER_SPI4
+#define FEATHER_SPI6
 //#define DUINO
 //#define DUINO_SPI6
 //#define PICO
 //#define PICO_SPI1
 //#define PICO_SPI2
 //#define TEST_FLAC
-//#define TEST_MP3
-#define HEALTH_CHECK
+#define TEST_MP3
+//#define HEALTH_CHECK
 
 using System.Threading;
 using System.Diagnostics;
@@ -63,11 +63,6 @@ public class Board
 		#if DUINO || FEATHER
 		_ = new Storage();
 #endif
-
-		GpioController gpioController = GpioController.GetDefault();
-		GpioPin pinPd15 = gpioController.OpenPin( 63 );
-		pinPd15.SetDriveMode( GpioPinDriveMode.Output );
-		pinPd15.Write( GpioPinValue.High );
 
 		audioCodec = new Vs1053(
 			spiControllerName: SpiControllerName,

@@ -50,7 +50,7 @@ Previous patch resources are split into six dedicated patch projects, each consu
 ## 📦 Requirements
 
 - .NET Framework **4.8**
-- TinyCLR OS packages (3.0.2.1000), including:
+- TinyCLR OS packages (3.0.2.3000), including:
   - `GHIElectronics.TinyCLR.Devices.Gpio`
   - `GHIElectronics.TinyCLR.Devices.Spi`
   - `GHIElectronics.TinyCLR.Devices.Uart`

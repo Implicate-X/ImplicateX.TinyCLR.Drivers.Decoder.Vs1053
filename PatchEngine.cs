@@ -43,7 +43,8 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 			}
 
 			/// <summary>
-			/// Loads a specific patch type into the VS1053B.
+			/// Loads the requested patch, or restarts it if it is already resident.
+			/// A different patch or a decoder reset requires a new upload.
 			/// </summary>
 			/// <param name="patchType">The type of patch to load.</param>
 			public void LoadPlugin( PatchType patchType )
@@ -53,12 +54,51 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 					PatchType.StandardCodec => Standard.Data,
 					//PatchType.Dsd => Dsd.Data,
 					PatchType.Flac => Flac.Data,
-					PatchType.Latm => Latm.Data,
+					//PatchType.Latm => Latm.Data,
 					//PatchType.FlacLatm => FlacLatm.Data,
 					PatchType.Pitch => Pitch.Data,
 					_ => throw new NotSupportedException( $"Patch type '{patchType}' is currently not embedded as resource." ),
 				};
 
+				lock( device.patchSync )
+				{
+					if( device.hasLoadedPatch && device.loadedPatch == patchType )
+					{
+						try
+						{
+							device.SciWrite( Register.AppStartAddress, 0x0050 );
+							device.AwaitPatchReady();
+						}
+						catch
+						{
+							device.hasLoadedPatch = false;
+							device.patchResetRequired = true;
+							throw;
+						}
+						return;
+					}
+
+					if( device.hasLoadedPatch || device.patchResetRequired )
+					{
+						device.SoftReset();
+					}
+
+					device.hasLoadedPatch = false;
+					device.patchResetRequired = true;
+					ApplyPluginData( pluginData );
+					device.loadedPatch = patchType;
+					device.hasLoadedPatch = true;
+					device.patchResetRequired = false;
+				}
+			}
+
+			/// <summary>
+			/// Applies the plugin data to the VS1053B by writing the appropriate registers.
+			/// </summary>
+			/// <param name="pluginData">The plugin data as an array of ushorts.</param>
+			/// <exception cref="InvalidOperationException">Thrown if the plugin data is incomplete or invalid.</exception>
+			private void ApplyPluginData( ushort[] pluginData )
+			{
 				Debug.WriteLineIf( EnableVerbosePatchTrace, $"[PatchEngine] ApplyPluginData: Starting with {pluginData.Length} ushorts" );
 
 				int index = 0;
@@ -69,8 +109,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 				{
 					if( index + 1 >= pluginData.Length )
 					{
-						// Not enough data for addr + n
-						break;
+						throw new InvalidOperationException( "Incomplete patch run header." );
 					}
 
 					ushort address = pluginData[index];
@@ -83,7 +122,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 						// RLE run: replicate one value n times
 						if( index >= pluginData.Length )
 						{
-							break;
+							throw new InvalidOperationException( "Incomplete patch RLE run." );
 						}
 
 						ushort value = pluginData[index++];
@@ -106,8 +145,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 						{
 							if( index >= pluginData.Length )
 							{
-								Debug.WriteLineIf( EnableVerbosePatchTrace, $"    [ERROR] Ran out of data at run {runCount}, literal item {i}/{n}" );
-								break;
+								throw new InvalidOperationException( "Incomplete patch literal run." );
 							}
 
 							ushort value = pluginData[index];
