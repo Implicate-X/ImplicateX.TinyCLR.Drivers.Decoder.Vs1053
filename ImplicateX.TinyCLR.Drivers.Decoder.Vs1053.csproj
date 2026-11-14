@@ -54,6 +54,7 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Vs1053.cs" />
     <Compile Include="WavProcessor.cs" />
+    <Compile Include="WmaProcessor.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

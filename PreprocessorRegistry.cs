@@ -21,7 +21,8 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 				new FlacProcessor(),
 				new OggProcessor(),
 				new DsdProcessor(),
-				new M4aProcessor()
+				new M4aProcessor(),
+				new WmaProcessor()
 			];
 
 			/// <summary>

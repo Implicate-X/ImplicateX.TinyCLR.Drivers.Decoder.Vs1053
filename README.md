@@ -11,7 +11,7 @@
 - 🎚️ Manual chip-select via GPIO (no automatic SPI CS)
 - 📡 Stable DREQ synchronization before SDI writes
 - 🔁 Hardware reset + startup register configuration
-- 🎵 MP3, WAV, FLAC, OGG, AAC, MID, and M4A playback
+- 🎵 MP3, WAV, FLAC, OGG, AAC, WMA, MID, and M4A playback
 - 🔊 Sine test support for hardware validation
 - 🎹 Optional real-time MIDI initialization and UART MIDI transport
 - 🧩 Modular Media Preprocessor Architecture
@@ -27,6 +27,7 @@
   - M4A → MP4 container with AAC track extraction
   - AAC → ADTS/ADIF raw stream
   - OGG → Ogg container with Vorbis/Opus track extraction
+  - WMA → standard-codec stream passthrough
 ---
 ## ⚙️ Patching and Preprocessing
 Previous patch resources are split into six dedicated patch projects, each consumed as a patch array.
