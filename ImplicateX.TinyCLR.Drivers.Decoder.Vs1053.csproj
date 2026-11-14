@@ -53,6 +53,8 @@
     <Compile Include="PreprocessorRegistry.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Vs1053.cs" />
+    <Compile Include="Vs1053.HealthCheck.cs" />
+    <Compile Include="Vs1053.StreamPlayer.cs" />
     <Compile Include="WavProcessor.cs" />
     <Compile Include="WmaProcessor.cs" />
   </ItemGroup>
