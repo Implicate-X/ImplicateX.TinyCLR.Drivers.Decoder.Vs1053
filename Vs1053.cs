@@ -452,8 +452,14 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 				this.OverallCode = firstFailure;
 			}
 
+			/// <summary>
+			/// Gets the health test results.
+			/// </summary>
 			public HealthTestResult[] Results { get; }
 			public bool IsHealthy { get; }
+			/// <summary>
+			/// Gets the overall health code.
+			/// </summary>
 			public HealthCode OverallCode { get; }
 		}
 
@@ -585,6 +591,11 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 
 		public int StreamingChunkSize => this.currentStreamChunkSize;
 		public int StreamingDataSpiFrequency => this.currentDataSpiFrequency;
+
+		/// <summary>
+		/// Gets or sets the DREQ polling interval, in milliseconds.
+		/// </summary>
+		/// <remarks>Values less than zero are treated as zero.</remarks>
 		public static int DreqPollIntervalMilliseconds
 		{
 			get => DreqPollIntervalMs;
