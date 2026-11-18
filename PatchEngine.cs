@@ -53,8 +53,8 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 				{
 					PatchType.StandardCodec => Standard.Data,
 					//PatchType.Dsd => Dsd.Data,
-					PatchType.Flac => Flac.Data,
-					//PatchType.Latm => Latm.Data,
+					//PatchType.Flac => Flac.Data,
+					PatchType.Latm => Latm.Data,
 					//PatchType.FlacLatm => FlacLatm.Data,
 					PatchType.Pitch => Pitch.Data,
 					_ => throw new NotSupportedException( $"Patch type '{patchType}' is currently not embedded as resource." ),

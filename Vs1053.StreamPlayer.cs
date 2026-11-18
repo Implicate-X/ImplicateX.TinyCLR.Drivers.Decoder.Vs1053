@@ -10,10 +10,14 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		/// <summary>
 		/// Prepares the decoder for continuous streaming input.
 		/// </summary>
-		public void StartStream()
+		/// <param name="loadStandardCodecPatch">Whether to load the standard codec patch before streaming.</param>
+		public void StartStream( bool loadStandardCodecPatch = true )
 		{
-			this.patchEngine.LoadPlugin( PatchEngine.PatchType.StandardCodec );
-			
+			if( loadStandardCodecPatch )
+			{
+				this.patchEngine.LoadPlugin( PatchEngine.PatchType.StandardCodec );
+			}
+
 			ConfigureStartupRegisters();
 
 			this.spiDataDevice.ConnectionSettings.ClockFrequency = this.currentDataSpiFrequency;
@@ -78,14 +82,16 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 					return;
 				}
 
-				StartBufferedAudioWorkers( () => FileAudioProducerWorker( filePath ), null );
+				StartBufferedAudioWorkers( () => FileAudioProducerWorker( filePath ), null!, loadStandardCodecPatch: true );
 			}
 		}
 
 		/// <summary>
 		/// Starts buffered playback from a cancellable source. The codec owns the source after this call succeeds.
 		/// </summary>
-		public void StartBufferedStream( IBufferedAudioSource source )
+		/// <param name="source">The source providing audio data.</param>
+		/// <param name="loadStandardCodecPatch">Whether to load the standard codec patch before streaming.</param>
+		public void StartBufferedStream( IBufferedAudioSource source, bool loadStandardCodecPatch = true )
 		{
 			if( source == null )
 			{
@@ -99,7 +105,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 					throw new InvalidOperationException( "Buffered audio playback is already active or still stopping." );
 				}
 
-				StartBufferedAudioWorkers( () => BufferedAudioProducerWorker( source ), source );
+				StartBufferedAudioWorkers( () => BufferedAudioProducerWorker( source ), source, loadStandardCodecPatch );
 			}
 		}
 
@@ -108,7 +114,8 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		/// </summary>
 		/// <param name="producer">The producer thread start delegate.</param>
 		/// <param name="source">The buffered audio source.</param>
-		private void StartBufferedAudioWorkers( ThreadStart producer, IBufferedAudioSource source )
+		/// <param name="loadStandardCodecPatch">Whether to load the standard codec patch before streaming.</param>
+		private void StartBufferedAudioWorkers( ThreadStart producer, IBufferedAudioSource source, bool loadStandardCodecPatch )
 		{
 			ResetFileAudioBuffer();
 
@@ -123,7 +130,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 				Priority = ThreadPriority.Highest
 			};
 
-			this.fileAudioConsumerThread = new Thread( FileAudioConsumerWorker )
+			this.fileAudioConsumerThread = new Thread( () => FileAudioConsumerWorker( loadStandardCodecPatch ) )
 			{
 				Priority = ThreadPriority.AboveNormal
 			};
@@ -272,7 +279,8 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		/// <summary>
 		/// The worker thread method for consuming file audio data.
 		/// </summary>
-		private void FileAudioConsumerWorker()
+		/// <param name="loadStandardCodecPatch">Whether to load the standard codec patch before streaming.</param>
+		private void FileAudioConsumerWorker( bool loadStandardCodecPatch )
 		{
 			byte[] consumeBuffer = new byte[ FileAudioWriteChunkSize ];
 
@@ -281,7 +289,7 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 
 			try
 			{
-				StartStream();
+				StartStream( loadStandardCodecPatch );
 
 				streamStarted = true;
 

@@ -5,6 +5,7 @@ using System.IO;
 using System.Threading;
 using GHIElectronics.TinyCLR.Devices.Gpio;
 using GHIElectronics.TinyCLR.Devices.Spi;
+//using ImplicateX.TinyCLR.Drivers.Decoder.Patch;
 
 namespace ImplicateX.TinyCLR.Drivers.Decoder
 {
@@ -549,11 +550,16 @@ namespace ImplicateX.TinyCLR.Drivers.Decoder
 		/// Performs a hardware reset, applies initial SCI register configuration, then increases SDI SPI clock
 		/// from startup speed to streaming speed for audio data transfer.
 		/// </remarks>
-		public void Initialize()
+		/// <param name="loadStandardCodecPatch">Whether to load the standard codec patch during initialization.</param>
+		public void Initialize( bool loadStandardCodecPatch = true )
 		{
 			ResetHardware();
 			ConfigureStartupRegisters();
-			this.patchEngine.LoadPlugin( PatchEngine.PatchType.StandardCodec );
+
+			if( loadStandardCodecPatch )
+			{
+				this.patchEngine.LoadPlugin( PatchEngine.PatchType.StandardCodec );
+			}
 
 			this.spiDataDevice.ConnectionSettings.ClockFrequency = this.currentDataSpiFrequency;
 		}

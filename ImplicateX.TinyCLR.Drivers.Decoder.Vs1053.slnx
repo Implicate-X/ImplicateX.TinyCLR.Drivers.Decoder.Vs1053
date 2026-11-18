@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/GHI/">
+    <Project Path="../../../Libraries/GHIElectronics.TinyCLR.Pins/GHIElectronics.TinyCLR.Pins.csproj" Id="2dceef58-5455-457c-b968-52d791605d07" />
+  </Folder>
   <Folder Name="/Solution Items/">
     <File Path="license.txt" />
     <File Path="README.md" />
@@ -29,7 +32,7 @@
     <File Path="patches/Raw/vs1053b-patches.pdf" />
     <File Path="patches/Raw/vs1053b-patches.txt" />
   </Folder>
-  <Project Path="App/App.csproj" Id="cfdf71f1-56e5-400b-a11e-89abf0283429">
+  <Project Path="App/ImplicateX.TinyCLR.Drivers.Decoder.Vs1053.App.csproj" Id="cfdf71f1-56e5-400b-a11e-89abf0283429">
     <Deploy />
   </Project>
   <Project Path="ImplicateX.TinyCLR.Drivers.Decoder.Vs1053.csproj" Id="7a660e98-fa49-4a18-b9c0-9732765d84ce" />

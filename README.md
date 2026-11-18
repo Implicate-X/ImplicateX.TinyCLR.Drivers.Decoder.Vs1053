@@ -148,13 +148,17 @@ If `GPIO0/GPIO1` are available, the driver applies real-time MIDI boot pin level
 
 ## 📚 Public API (Core)
 
-`Initialize()`
+`Initialize(bool loadStandardCodecPatch = true)`
+`StartStream(bool loadStandardCodecPatch = true)`
+`StartBufferedStream(IBufferedAudioSource source, bool loadStandardCodecPatch = true)`
 `SetVolume(byte leftChannel, byte rightChannel)`
 `PlayMp3(string filePath)`
 `PlayWav(string filePath)`
 `RunStartupSineTest(int durationMs = 3000, byte sineCode = 0x44)`
 `StartSineTest(byte sineCode = 0x44)`
 `StopSineTest()`
+
+Pass `loadStandardCodecPatch: false` to skip loading the standard patch for formats such as MP3 that do not require it. The default remains `true` for compatibility with formats that use the patch.
 
 ## 📄 License
 
